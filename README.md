@@ -13,7 +13,7 @@ Automated test harness for verifying Claude Code hook scripts in `~/.claude/hook
 
 ```bash
 uv venv
-uv sync --dev
+uv sync --extra dev
 ```
 
 ## Running tests

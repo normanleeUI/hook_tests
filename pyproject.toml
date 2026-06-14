@@ -1,0 +1,16 @@
+[project]
+name = "hook-test-harness"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "hypothesis==6.122.3",
+    "mutmut>=3.2,<4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"

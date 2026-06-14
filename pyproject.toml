@@ -14,4 +14,4 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -q -n auto"
+addopts = "-ra -q -n6"

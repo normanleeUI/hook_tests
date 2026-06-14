@@ -188,27 +188,21 @@ class TestBlockGitAddEnvKnownBugs:
         strict=True,
         reason="hook bug: bulk_add_re requires ./--all/-A immediately after 'git add'",
     )
-    def test_git_add_verbose_dot_should_block(self, bash_payload):
-        """Step 0d: -v flag between 'add' and '.' breaks bulk_add_re."""
-        code, _, _ = run_hook(HOOK, bash_payload("git add -v ."))
-        assert code == 2
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: bulk_add_re requires ./--all/-A immediately after 'git add'",
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git add -v .",
+            "git add --verbose .",
+            "git add -n .",
+            "git add -f .",
+            "git add --force .",
+            "git add --intent-to-add .",
+        ],
+        ids=["dash-v", "verbose", "dash-n", "dash-f", "force", "intent-to-add"],
     )
-    def test_git_add_verbose_long_dot_should_block(self, bash_payload):
-        """Step 0d: --verbose flag between 'add' and '.' breaks bulk_add_re."""
-        code, _, _ = run_hook(HOOK, bash_payload("git add --verbose ."))
-        assert code == 2
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: bulk_add_re requires ./--all/-A immediately after 'git add'",
-    )
-    def test_git_add_dryrun_dot_should_block(self, bash_payload):
-        """Step 0d: -n flag between 'add' and '.' breaks bulk_add_re."""
-        code, _, _ = run_hook(HOOK, bash_payload("git add -n ."))
+    def test_git_add_flag_dot_should_block(self, bash_payload, cmd):
+        """Step 0d: flags between 'add' and '.' should not prevent bulk-add detection."""
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
         assert code == 2
 
     @pytest.mark.xfail(

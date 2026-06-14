@@ -36,6 +36,11 @@ class TestBlockBarePipExamples:
         code, _, _ = run_hook(HOOK, bash_payload("python -m pip install requests"))
         assert code == 2
 
+    def test_python3_m_pip_blocked(self, bash_payload):
+        """python3 -m pip: space before pip is not in [./\\w], so regex matches."""
+        code, _, _ = run_hook(HOOK, bash_payload("python3 -m pip install requests"))
+        assert code == 2
+
     def test_compound_command_pip_blocked(self, bash_payload):
         code, _, _ = run_hook(HOOK, bash_payload("cd /tmp && pip install requests"))
         assert code == 2
@@ -225,11 +230,46 @@ class TestBlockBarePipKnownBugs:
         )
         assert code == 2
 
+    @pytest.mark.xfail(strict=True, reason="hook bug: hook regex doesn't match pip3")
+    @given(pkg=st.from_regex(r"[a-z][a-z0-9_-]{0,30}", fullmatch=True))
+    @settings(
+        max_examples=200, suppress_health_check=[HealthCheck.function_scoped_fixture]
+    )
+    def test_pip3_always_blocked(self, bash_payload, pkg):
+        """pip3 install is equally dangerous regardless of package name."""
+        code, _, _ = run_hook(HOOK, bash_payload(f"pip3 install {pkg}"))
+        assert code == 2
+
+    @pytest.mark.xfail(strict=True, reason="hook bug: hook regex doesn't match pip3")
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "sudo pip3 install requests",
+            "cd /tmp && pip3 install requests",
+            "pip3 install -r requirements.txt",
+            "PYTHONPATH=/x pip3 install numpy",
+        ],
+        ids=["sudo", "compound-and", "dash-r", "env-var-prefix"],
+    )
+    def test_pip3_in_shell_context_should_block(self, bash_payload, cmd):
+        """pip3 in various shell structures should also be blocked."""
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
+        assert code == 2
+
     @pytest.mark.xfail(
         strict=True,
         reason="hook bug: hyphen before pip incorrectly matches [^./\\w]",
     )
-    def test_some_pip_false_positive_should_allow(self, bash_payload):
-        """Step 0d: some-pip is a distinct executable, not bare pip."""
-        code, _, _ = run_hook(HOOK, bash_payload("some-pip install foo"))
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "some-pip install foo",
+            "auto-pip install bar",
+            "my-pip install baz",
+        ],
+        ids=["some-pip", "auto-pip", "my-pip"],
+    )
+    def test_hyphenated_pip_false_positive_should_allow(self, bash_payload, cmd):
+        """Step 0d: {word}-pip is a distinct executable, not bare pip."""
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
         assert code == 0

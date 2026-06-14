@@ -89,6 +89,13 @@ class TestBlockSuppressionsExamples:
         )
         assert code == 2
 
+    def test_blocks_bare_noqa_no_code(self, edit_payload):
+        """Bare # noqa without an error code is blocked."""
+        code, _, _ = run_hook(
+            HOOK, edit_payload("/project/src/foo.py", f"x = 1  {_nq()}")
+        )
+        assert code == 2
+
     def test_allows_justified_noqa(self, edit_payload):
         """noqa with noqa-reason justification is allowed."""
         code, _, _ = run_hook(
@@ -263,5 +270,38 @@ class TestBlockSuppressionsEdgeCases:
                 "/project/src/foo.py",
                 f"x = foo()  {_ti('', '# Known-Issue: third-party types')}",
             ),
+        )
+        assert code == 0
+
+    def test_uppercase_type_ignore_blocked(self, edit_payload):
+        """Step 0d: case variants of type: ignore must also block."""
+        ti_upper = "# TYPE" + ": IGNORE"
+        code, _, _ = run_hook(
+            HOOK, edit_payload("/project/src/foo.py", f"x = 1  {ti_upper}")
+        )
+        assert code == 2
+
+    def test_uppercase_noqa_blocked(self, edit_payload):
+        """Step 0d: case variants of noqa must also block."""
+        nq_upper = "# NO" + "QA"
+        code, _, _ = run_hook(
+            HOOK, edit_payload("/project/src/foo.py", f"x = 1  {nq_upper}")
+        )
+        assert code == 2
+
+    def test_mixed_case_type_ignore_blocked(self, edit_payload):
+        """Step 0d: mixed case type: ignore must also block."""
+        ti_mixed = "# Type" + ": Ignore"
+        code, _, _ = run_hook(
+            HOOK, edit_payload("/project/src/foo.py", f"x = 1  {ti_mixed}")
+        )
+        assert code == 2
+
+    def test_allows_bare_noqa_with_noqa_reason(self, edit_payload):
+        """Step 0d: bare noqa with noqa-reason justification is allowed."""
+        comment = _nq("", "# noqa-reason: legacy code")
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload("/project/src/foo.py", f"x = 1  {comment}"),
         )
         assert code == 0

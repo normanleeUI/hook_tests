@@ -5,7 +5,7 @@ dependency-changing commands (``uv add``, ``uv sync``, ``uv pip install``)
 succeed (exitCode == 0), and silently exits for non-matching commands or
 failed commands (exitCode != 0).
 
-Exit codes: 0 = no action or audit clean, 1 = vulnerabilities found.
+Exit codes: 0 = no action or audit clean, 2 = vulnerabilities found (spec-correct; see known bugs).
 
 The hook has two sequential gates:
   1. Command substring check -- must contain ``uv add``, ``uv sync``, or
@@ -121,6 +121,12 @@ class TestPipAuditCheckExamples:
         in stderr.
         """
         payload = post_tool_payload("cd /project && uv add requests")
+        stderr = _run_hook_expecting_engagement(payload)
+        assert "[pip-audit]" in stderr, "Hook should have engaged for matching command"
+
+    def test_uv_pip_install_with_exit_zero_engages(self, post_tool_payload):
+        """uv pip install with exitCode=0 passes both gates and runs pip-audit."""
+        payload = post_tool_payload("uv pip install requests")
         stderr = _run_hook_expecting_engagement(payload)
         assert "[pip-audit]" in stderr, "Hook should have engaged for matching command"
 

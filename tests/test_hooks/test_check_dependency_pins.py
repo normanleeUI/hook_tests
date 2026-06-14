@@ -230,9 +230,17 @@ class TestDependencyPinsProperties:
         strict=True,
         reason="hook bug: environment marker < fools upper-bound detection",
     )
-    def test_env_marker_open_ended_should_block(self, edit_payload):
-        """Step 0d: >=2.0 is open-ended regardless of environment marker."""
-        dep_line = 'requests>=2.0;python_version<"3.8"'
+    @pytest.mark.parametrize(
+        "dep_line",
+        [
+            'requests>=2.0;python_version<"3.8"',
+            'numpy>=1.21;sys_platform<"win32"',
+            'pandas>=2.0;platform_machine<"x86_64"',
+        ],
+        ids=["python-version", "sys-platform", "platform-machine"],
+    )
+    def test_env_marker_open_ended_should_block(self, edit_payload, dep_line):
+        """Step 0d: >=X is open-ended regardless of which environment marker follows."""
         code, _, _ = run_hook(
             HOOK,
             edit_payload(
@@ -288,6 +296,18 @@ class TestDependencyPinsEdgeCases:
                 f'dependencies = [\n    "{dep_line}",\n]',
             ),
         )
+        assert code == 0
+
+    def test_requirements_dev_txt_pinned_passes(self):
+        """Step 0d: requirements-dev.txt with pinned deps should pass."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements-dev.txt",
+                "new_string": "requests==2.32.3",
+            },
+            "tool_response": {"filePath": "/project/requirements-dev.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
         assert code == 0
 
     def test_requirements_dev_txt_enforces_pins(self):

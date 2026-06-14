@@ -3193,6 +3193,111 @@ Non-blocking hooks (check_docstrings, check_random_seeds, etc.) are lower priori
 
 ---
 
+### Step 20: `test_intent_gaps.py` — intent-driven xfail tests for spec conflicts
+
+**Purpose**: Steps 3–14c test hooks against their *current implementation*. This step flips the perspective: test hooks against their *stated intent* (from Step 0) and mark failures as `xfail` to document where the implementation falls short. This surfaces the gap between "what the hook does" and "what the hook should do."
+
+**Why this matters**: A green test suite that only tests current behavior creates a false sense of correctness. If `block_git_add_env.py` is meant to block bulk `git add` operations but its regex misses `git add -v .`, the test suite should *say so* — not silently omit the case. xfail tests document known gaps without breaking CI, and they automatically surface (as xpass) when the hook is fixed.
+
+**Files**: `tests/test_hooks/test_intent_gaps.py` (new)
+
+**Approach**:
+
+1. **Collect known spec conflicts** already documented in test file docstrings and previous step reports:
+
+   **`block_git_add_env.py`** (bulk_add_re regex too narrow):
+   - `git add -v .` / `git add --verbose .` / `git add -n .` — flags between `add` and `.`
+   - `git -C /path add .` / `git -C /tmp add -A` — `-C /path` between `git` and `add`
+   - `git add -u` / `git add --update` — not in the regex alternation
+
+   **`block_suppressions.py`** (case sensitivity):
+   - `# TYPE: IGNORE` / `# NOQA` — uppercase variants bypass detection (Step 0 note)
+
+   **`pip_audit_check.py`** (input validation):
+   - Non-dict JSON payload crashes (documented in test_adversarial_payloads.py xfails)
+   - `{"tool_input": {"command": None}}` crashes
+
+2. **Surface new spec conflicts** by systematically testing each hook against its Step 0 intent description. For each hook, ask: "what inputs *should* this hook catch that a naive bypass would try?" Focus areas:
+   - **Shell quoting/escaping**: Do hooks handle `'single quotes'`, `"double quotes"`, `$()` subshells, backtick substitution around the protected pattern?
+   - **Whitespace variants**: Extra spaces, tabs, newlines in commands
+   - **Case sensitivity**: Where the hook uses case-sensitive matching but the target is case-insensitive (e.g., file extensions on case-insensitive filesystems)
+   - **Path traversal**: `../`, symlink paths, absolute vs relative paths around protected patterns
+   - **Compound commands**: `&&`, `||`, `;`, `|` — does the hook check the full command string or just the first segment?
+   - **Unicode/homoglyph**: Where applicable (mainly prompt injection)
+
+3. **Write tests** using this pattern:
+   ```python
+   @pytest.mark.xfail(
+       reason="bulk_add_re requires ./--all/-A immediately after 'git add', "
+              "doesn't handle interleaved flags",
+       strict=True,
+   )
+   def test_git_add_verbose_dot_should_block(self, bash_payload):
+       """Intent: block ALL bulk git add operations, including with flags."""
+       code, _, _ = run_hook("block_git_add_env.py", bash_payload("git add -v ."))
+       assert code == 2
+   ```
+
+   Use `strict=True` so that if the hook is fixed, the test becomes an xpass *failure* — forcing removal of the xfail marker rather than silently passing.
+
+4. **Organize by hook** with clear class names:
+   ```python
+   class TestBlockGitAddEnvIntentGaps:
+       """Cases where block_git_add_env.py SHOULD block but doesn't."""
+
+   class TestBlockSuppressionsIntentGaps:
+       """Cases where block_suppressions.py SHOULD block but doesn't."""
+
+   class TestPipAuditCheckIntentGaps:
+       """Input validation gaps in pip_audit_check.py."""
+   ```
+
+5. **Hypothesis sweep for new gaps**: For hooks with regex-based detection, use hypothesis to generate command variations that *should* match the hook's intent but might not match its regex:
+   ```python
+   git_flags = st.sampled_from(["-v", "--verbose", "-n", "--dry-run", "-f", "--force", "--intent-to-add", "-N"])
+
+   @pytest.mark.xfail(reason="bulk_add_re doesn't handle flags between 'add' and target", strict=True)
+   @given(flag=git_flags)
+   @settings(max_examples=50)
+   def test_git_add_flag_dot_should_block(self, bash_payload, flag):
+       """Any flag between 'git add' and '.' should still be blocked."""
+       code, _, _ = run_hook("block_git_add_env.py", bash_payload(f"git add {flag} ."))
+       assert code == 2
+   ```
+
+   For hooks where hypothesis discovers the test *passes* (no gap), remove the xfail and add it as a regular passing test — that's a win.
+
+**Test matrix**:
+
+| Hook | Gap | Source | Test Type |
+|------|-----|--------|-----------|
+| `block_git_add_env.py` | Flags between `add` and `.` (`-v`, `--verbose`, `-n`) | Step 5 report | xfail explicit + hypothesis |
+| `block_git_add_env.py` | `-C /path` prefix before `add` | Step 5 report | xfail explicit |
+| `block_git_add_env.py` | `-u` / `--update` not in alternation | Step 5 report | xfail explicit |
+| `block_suppressions.py` | Uppercase `# TYPE: IGNORE` / `# NOQA` bypasses | Step 0 note | xfail explicit |
+| `pip_audit_check.py` | Crashes on non-dict JSON / `command: None` | Step 2b xfails | xfail explicit |
+| All regex-based hooks | Shell quoting/escaping around protected patterns | New — systematic sweep | hypothesis discovery |
+| All regex-based hooks | Whitespace variants (tabs, extra spaces) | New — systematic sweep | hypothesis discovery |
+| All substring-match hooks | Compound command positioning | New — systematic sweep | hypothesis discovery |
+
+**Discovery process for new gaps**: For each hook tested in Steps 3–14c, review the Step 0 intent and ask:
+- What is the *threat* this hook prevents?
+- What would a determined (but not malicious) user accidentally do that triggers the threat but evades the hook?
+- What would an LLM generate that triggers the threat but evades the hook?
+
+This is not adversarial red-teaming — it's asking "are there *normal* command variations that slip through?"
+
+**Verification**: `pytest tests/test_hooks/test_intent_gaps.py -v` — all tests should either pass (gap doesn't exist) or xfail (gap confirmed). Zero unexpected failures.
+
+**Exit criteria**:
+- Every known spec conflict from Steps 3–6 reports has a corresponding xfail test
+- At least one hypothesis sweep per regex-based hook looking for new gaps
+- Each xfail has a `reason` string specific enough to guide the eventual fix
+- All xfails use `strict=True`
+- Any hypothesis test that passes (no gap found) is converted to a regular passing test
+
+---
+
 ## Exit Checklist
 
 - [ ] `pytest tests/test_hooks/ -v` — all tests pass
@@ -3240,6 +3345,10 @@ Non-blocking hooks (check_docstrings, check_random_seeds, etc.) are lower priori
 - [ ] `test_tier2_hooks.py` has directory depth tests for check_test_pair (0-2 found, 3+ not found)
 - [ ] `test_performance.py` establishes <2s baseline for all Python hooks
 - [ ] No hook exhibits regex backtracking on pathological input
+- [ ] `test_intent_gaps.py` has xfail tests for all known spec conflicts from Steps 3–6
+- [ ] `test_intent_gaps.py` has hypothesis sweeps for new gaps in regex-based hooks
+- [ ] All xfails use `strict=True` and have specific reason strings
+- [ ] Any hypothesis sweep that finds no gap is converted to a regular passing test
 
 ---
 

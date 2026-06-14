@@ -112,6 +112,7 @@ class TestPipAuditCheckExamples:
         assert code == 0
         assert "[pip-audit]" not in stderr
 
+    @pytest.mark.network
     def test_uv_add_with_exit_zero_engages(self, post_tool_payload):
         """uv add with exitCode=0 passes both gates and runs pip-audit.
 
@@ -124,12 +125,14 @@ class TestPipAuditCheckExamples:
         stderr = _run_hook_expecting_engagement(payload)
         assert "[pip-audit]" in stderr, "Hook should have engaged for matching command"
 
+    @pytest.mark.network
     def test_uv_pip_install_with_exit_zero_engages(self, post_tool_payload):
         """uv pip install with exitCode=0 passes both gates and runs pip-audit."""
         payload = post_tool_payload("uv pip install requests")
         stderr = _run_hook_expecting_engagement(payload)
         assert "[pip-audit]" in stderr, "Hook should have engaged for matching command"
 
+    @pytest.mark.network
     def test_uv_sync_frozen_with_exit_zero_engages(self, post_tool_payload):
         """uv sync --frozen with exitCode=0 passes both gates and runs pip-audit."""
         payload = post_tool_payload("uv sync --frozen")
@@ -210,6 +213,7 @@ class TestPipAuditCheckKnownBugs:
         strict=True,
         reason="hook bug: hook uses exit(1) for vuln found, should be exit(2) for deliberate block",
     )
+    @pytest.mark.network
     def test_vuln_found_should_exit_2(self):
         """Step 0d: exit 1 = hook error, not deliberate block. Should be exit 2."""
         payload = {

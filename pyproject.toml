@@ -14,4 +14,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -q -n6"
+addopts = "-ra -q -n6 -m 'not network'"
+markers = [
+    "network: tests that make real network calls (e.g. pip-audit hitting PyPI)",
+]

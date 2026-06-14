@@ -203,3 +203,33 @@ class TestBlockBarePipProperties:
         cmd = f"{prefix}pip install {pkg}"
         code, _, _ = run_hook(HOOK, bash_payload(cmd))
         assert code == 0, f"Expected allowed for: {cmd!r}"
+
+
+class TestBlockBarePipKnownBugs:
+    """Cases where block_bare_pip.py has known bugs (Step 0d)."""
+
+    @pytest.mark.xfail(strict=True, reason="hook bug: hook regex doesn't match pip3")
+    def test_pip3_install_should_block(self, bash_payload):
+        """Step 0d: pip3 is equally dangerous -- same global install behavior."""
+        code, _, _ = run_hook(HOOK, bash_payload("pip3 install requests"))
+        assert code == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: naive 'uv pip install' not in cmd check fooled by string appearing in echo",
+    )
+    def test_containment_bypass_should_block(self, bash_payload):
+        """Step 0d: 'uv pip install' in a string literal should not whitelist a real bare pip install."""
+        code, _, _ = run_hook(
+            HOOK, bash_payload('echo "uv pip install" && pip install foo')
+        )
+        assert code == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: hyphen before pip incorrectly matches [^./\\w]",
+    )
+    def test_some_pip_false_positive_should_allow(self, bash_payload):
+        """Step 0d: some-pip is a distinct executable, not bare pip."""
+        code, _, _ = run_hook(HOOK, bash_payload("some-pip install foo"))
+        assert code == 0

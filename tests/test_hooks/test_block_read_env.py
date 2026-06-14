@@ -92,3 +92,32 @@ class TestBlockReadEnvProperties:
     def test_non_env_files_always_pass(self, read_payload, name):
         code, _, _ = run_hook(HOOK, read_payload(f"/project/{name}"))
         assert code == 0
+
+
+class TestBlockReadEnvEdgeCases:
+    """Edge cases from Step 0d intent specs."""
+
+    def test_env_example_bak_blocked(self, read_payload):
+        """Backup of template (.env.example.bak) is not a recognized suffix."""
+        code, _, _ = run_hook(HOOK, read_payload("/project/.env.example.bak"))
+        assert code == 2
+
+    def test_env_dist_local_blocked(self, read_payload):
+        """Compound suffix (.env.dist.local) is not a recognized template."""
+        code, _, _ = run_hook(HOOK, read_payload("/project/.env.dist.local"))
+        assert code == 2
+
+    def test_uppercase_ENV_allowed(self, read_payload):
+        """Case-sensitive filesystem: .ENV does not match .env pattern."""
+        code, _, _ = run_hook(HOOK, read_payload("/project/.ENV"))
+        assert code == 0
+
+    def test_mixed_case_Env_allowed(self, read_payload):
+        """Case-sensitive filesystem: .Env does not match .env pattern."""
+        code, _, _ = run_hook(HOOK, read_payload("/project/.Env"))
+        assert code == 0
+
+    def test_missing_file_path_allowed(self):
+        """Fail-safe: missing file_path key should exit 0."""
+        code, _, _ = run_hook(HOOK, {"tool_input": {}})
+        assert code == 0

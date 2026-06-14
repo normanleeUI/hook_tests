@@ -6,6 +6,7 @@ and requirements*.txt files (exit 2), allows exact pins and bounded ranges
 hypothesis property tests.
 """
 
+import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -225,11 +226,12 @@ class TestDependencyPinsProperties:
         )
         assert code == 0
 
-    def test_known_bug_env_marker_false_pass(self, edit_payload):
-        """Documents a known bug: env markers with >= and < in the marker
-        are incorrectly treated as a bounded range because the hook does
-        simple substring matching for '>=' and '<' without distinguishing
-        version specifiers from environment markers."""
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: environment marker < fools upper-bound detection",
+    )
+    def test_env_marker_open_ended_should_block(self, edit_payload):
+        """Step 0d: >=2.0 is open-ended regardless of environment marker."""
         dep_line = 'requests>=2.0;python_version<"3.8"'
         code, _, _ = run_hook(
             HOOK,
@@ -238,9 +240,7 @@ class TestDependencyPinsProperties:
                 f'dependencies = [\n    "{dep_line}",\n]',
             ),
         )
-        # This SHOULD be exit 2 (open-ended >=), but the hook sees both
-        # >= and < in the string and treats it as a bounded range.
-        assert code == 0
+        assert code == 2
 
     @given(pkg=pkg_names, version=versions)
     @settings(
@@ -270,6 +270,34 @@ class TestDependencyPinsProperties:
                 "new_string": pkg,
             },
             "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 2
+
+
+class TestDependencyPinsEdgeCases:
+    """Edge cases from Step 0d intent specs."""
+
+    def test_bounded_with_exclusion_allowed(self, edit_payload):
+        """Step 0d: >=2.0,<3,!=2.5.0 has both >= and < -- exclusion is additional constraint."""
+        dep_line = "requests>=2.0,<3,!=2.5.0"
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload(
+                "/project/pyproject.toml",
+                f'dependencies = [\n    "{dep_line}",\n]',
+            ),
+        )
+        assert code == 0
+
+    def test_requirements_dev_txt_enforces_pins(self):
+        """Step 0d: requirements-dev.txt matches requirements*.txt -- dev deps should be pinned."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements-dev.txt",
+                "new_string": "requests",
+            },
+            "tool_response": {"filePath": "/project/requirements-dev.txt"},
         }
         code, _, _ = run_hook(HOOK, payload)
         assert code == 2

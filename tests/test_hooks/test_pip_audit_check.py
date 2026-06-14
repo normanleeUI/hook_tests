@@ -15,7 +15,6 @@ The hook has two sequential gates:
 Only when both gates pass does the hook engage and run ``uvx pip-audit``.
 """
 
-import json
 import os
 import subprocess
 
@@ -196,3 +195,40 @@ class TestPipAuditCheckProperties:
         )
         assert code == 0
         assert "[pip-audit]" not in stderr
+
+
+class TestPipAuditCheckKnownBugs:
+    """Known bugs in pip_audit_check.py (Step 0d)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: hook uses exit(1) for vuln found, should be exit(2) for deliberate block",
+    )
+    def test_vuln_found_should_exit_2(self):
+        """Step 0d: exit 1 = hook error, not deliberate block. Should be exit 2."""
+        payload = {
+            "tool_input": {"command": "uv add requests"},
+            "tool_result": {"exitCode": 0},
+        }
+        code, stderr, _ = run_hook(HOOK, payload, timeout=30)
+        if "[pip-audit]" not in stderr or "vulnerability" not in stderr.lower():
+            pytest.skip("No vulnerabilities found in current environment")
+        assert code == 2, "Vuln found should exit 2 (block), not 1 (error)"
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: unhandled exception on malformed input",
+    )
+    def test_non_dict_json_should_not_crash(self):
+        """Step 0d fail-safe: non-dict JSON payload should exit 0, not crash."""
+        code, _, _ = run_hook(HOOK, ["not", "a", "dict"])
+        assert code == 0
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: unhandled exception on malformed input",
+    )
+    def test_null_command_should_not_crash(self):
+        """Step 0d fail-safe: null command should exit 0, not crash."""
+        code, _, _ = run_hook(HOOK, {"tool_input": {"command": None}})
+        assert code == 0

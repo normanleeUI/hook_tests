@@ -232,3 +232,36 @@ class TestBlockSuppressionsProperties:
             edit_payload(f"/project/{exempt_dir}/module.py", multi),
         )
         assert code == 0
+
+
+class TestBlockSuppressionsEdgeCases:
+    """Edge cases from Step 0d intent specs."""
+
+    def test_type_ignore_with_code_but_no_justification_blocked(self, edit_payload):
+        """Step 0d: specific mypy code without justification still needs a reason."""
+        code, _, _ = run_hook(
+            HOOK, edit_payload("/project/src/foo.py", f"x = foo()  {_ti('override')}")
+        )
+        assert code == 2
+
+    def test_uppercase_mypy_bug_justification_allowed(self, edit_payload):
+        """Step 0d: justification markers are case-insensitive (re.IGNORECASE)."""
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload(
+                "/project/src/foo.py",
+                f"x = foo()  {_ti('misc', '# MYPY-BUG: upstream issue')}",
+            ),
+        )
+        assert code == 0
+
+    def test_mixed_case_known_issue_justification_allowed(self, edit_payload):
+        """Step 0d: justification markers are case-insensitive."""
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload(
+                "/project/src/foo.py",
+                f"x = foo()  {_ti('', '# Known-Issue: third-party types')}",
+            ),
+        )
+        assert code == 0

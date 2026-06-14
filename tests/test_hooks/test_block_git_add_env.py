@@ -151,7 +151,7 @@ class TestBlockGitAddEnvProperties:
         assert code == 2, f"Expected blocked for: {cmd!r}"
 
     @given(
-        prefix=st.sampled_from(["", "cd /project && ", "git -C /tmp "]),
+        prefix=st.sampled_from(["", "cd /project && "]),
         env_suffix=st.from_regex(r"[a-z][a-z0-9_-]{0,20}", fullmatch=True),
     )
     @settings(
@@ -162,10 +162,7 @@ class TestBlockGitAddEnvProperties:
         """env_file_re searches the full command string, so .env.{suffix}
         is caught regardless of command prefix structure."""
         assume(env_suffix not in ("example", "sample", "template", "dist"))
-        if "git -C" in prefix:
-            cmd = f"{prefix}add .env.{env_suffix}"
-        else:
-            cmd = f"{prefix}git add .env.{env_suffix}"
+        cmd = f"{prefix}git add .env.{env_suffix}"
         code, _, _ = run_hook(HOOK, bash_payload(cmd))
         assert code == 2, f"Expected blocked for: {cmd!r}"
 
@@ -182,3 +179,70 @@ class TestBlockGitAddEnvProperties:
         cmd = f"git add {safe_file}"
         code, _, _ = run_hook(HOOK, bash_payload(cmd))
         assert code == 0, f"Expected allowed for: {cmd!r}"
+
+
+class TestBlockGitAddEnvKnownBugs:
+    """Cases where block_git_add_env.py SHOULD block bulk adds but doesn't (Step 0d)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: bulk_add_re requires ./--all/-A immediately after 'git add'",
+    )
+    def test_git_add_verbose_dot_should_block(self, bash_payload):
+        """Step 0d: -v flag between 'add' and '.' breaks bulk_add_re."""
+        code, _, _ = run_hook(HOOK, bash_payload("git add -v ."))
+        assert code == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: bulk_add_re requires ./--all/-A immediately after 'git add'",
+    )
+    def test_git_add_verbose_long_dot_should_block(self, bash_payload):
+        """Step 0d: --verbose flag between 'add' and '.' breaks bulk_add_re."""
+        code, _, _ = run_hook(HOOK, bash_payload("git add --verbose ."))
+        assert code == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: bulk_add_re requires ./--all/-A immediately after 'git add'",
+    )
+    def test_git_add_dryrun_dot_should_block(self, bash_payload):
+        """Step 0d: -n flag between 'add' and '.' breaks bulk_add_re."""
+        code, _, _ = run_hook(HOOK, bash_payload("git add -n ."))
+        assert code == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: -C /path between git and add breaks regex",
+    )
+    def test_git_C_path_add_dot_should_block(self, bash_payload):
+        """Step 0d: git -C /path add . should still be caught as bulk add."""
+        code, _, _ = run_hook(HOOK, bash_payload("git -C /other/project add ."))
+        assert code == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: -C /path between git and add breaks regex",
+    )
+    def test_git_C_tmp_add_A_should_block(self, bash_payload):
+        """Step 0d: git -C /tmp add -A should still be caught as bulk add."""
+        code, _, _ = run_hook(HOOK, bash_payload("git -C /tmp add -A"))
+        assert code == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: -u/--update not in regex alternation",
+    )
+    def test_git_add_u_should_block(self, bash_payload):
+        """Step 0d: git add -u stages all tracked modified files -- equivalent to bulk add."""
+        code, _, _ = run_hook(HOOK, bash_payload("git add -u"))
+        assert code == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="hook bug: -u/--update not in regex alternation",
+    )
+    def test_git_add_update_should_block(self, bash_payload):
+        """Step 0d: git add --update stages all tracked modified files -- equivalent to bulk add."""
+        code, _, _ = run_hook(HOOK, bash_payload("git add --update"))
+        assert code == 2

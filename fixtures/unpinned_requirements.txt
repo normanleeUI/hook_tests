@@ -1,0 +1,9 @@
+# Properly pinned (should pass):
+scipy==1.11.4
+flask>=2.0,<3
+
+# Unpinned — these should trigger blocking:
+numpy>=1.20
+requests
+pandas~=2.0
+httpx

@@ -4,13 +4,13 @@ Manual QA checklist for verifying that Claude Code hooks **actually fire** when 
 
 ## Prerequisites
 
-- [ ] Claude Code CLI installed and working
-- [ ] Working directory is `hook_tests/` (this project)
-- [ ] `~/.claude/settings.json` contains all 19 hook definitions
-- [ ] Python virtual environment activated (`uv sync` or equivalent)
-- [ ] All hook scripts are executable (`chmod +x hooks/*.py hooks/*.sh`)
-- [ ] Git repo is initialized with a remote configured
-- [ ] Fixture files exist in `src/` and `fixtures/` (see list at bottom)
+- [x] Claude Code CLI installed and working
+- [x] Working directory is `hook_tests/` (this project)
+- [x] `~/.claude/settings.json` contains all 19 hook definitions
+- [x] Python virtual environment activated (`uv sync` or equivalent)
+- [x] All hook scripts are executable (`chmod +x hooks/*.py hooks/*.sh`)
+- [x] Git repo is initialized with a remote configured
+- [x] Fixture files exist in `src/` and `fixtures/` (see list at bottom)
 
 ## Observation Guide
 
@@ -24,6 +24,23 @@ Manual QA checklist for verifying that Claude Code hooks **actually fire** when 
 
 **Tip**: Run with `--verbose` or check `~/.claude/debug/` logs if you cannot tell whether a hook fired.
 
+## Debug Log
+
+All hooks now log to `/tmp/hook_debug.log` on every invocation (added 2026-06-15). Check this file after any test to confirm whether a hook fired. This resolves the observability gap where exit-0 hooks were indistinguishable from hooks that never fired.
+
+Helper: `~/.claude/hooks/hook_log.py` — Python hooks import it; Bash hooks inline a `printf` equivalent.
+
+## TODO (2026-06-15)
+
+Discoveries from the first manual testing pass that need follow-up:
+
+- [ ] **`scan_secrets_on_commit` logic failure**: Hook fires (confirmed by debug log) but fails to block commits containing `sk-ant-` patterns. Suspect `git diff --cached` returns empty in the hook subprocess context (PreToolUse fires *before* the tool runs, so the commit hasn't happened yet — but the file IS staged). Investigate what the hook actually sees.
+- [ ] **`pip_audit_check` logic failure**: Hook fires on all Bash commands (debug log confirms) but never produces visible output. Original diagnosis was wiring failure; now believed to be `uvx pip-audit` timing out under sandbox network restrictions. Investigate whether the hook silently catches the timeout.
+- [ ] **`if:` conditions don't filter**: Debug log shows all Bash-matched hooks fire on EVERY Bash command regardless of `if:` condition. Either `if:` doesn't work as documented, or the hook receives the input and must filter internally. Clarify expected behavior.
+- [ ] **Re-run section 1 tests with debug log**: Original results were diagnosed as wiring failures. Now that we know hooks fire, re-test and check debug log to get accurate diagnoses.
+- [ ] **statusMessage never visible on PreToolUse hooks**: Tested on `block_read_env` — never flashes for blocks, allows, or negative tests. May be a Claude Code limitation for PreToolUse event type.
+- [ ] **stderr visibility differs by tool type**: Read tool blocks don't show stderr in console; Bash tool blocks do. Both use the same mechanism (stderr + exit 2). Investigate whether this is a Claude Code UI bug or intentional.
+
 ---
 
 ## 1. pip_audit_check.py (PRIORITY)
@@ -34,20 +51,27 @@ Manual QA checklist for verifying that Claude Code hooks **actually fire** when 
 
 ### Positive tests (hook SHOULD fire)
 
-- [ ] Ask Claude: "run uv add httpx" -- after install, STDERR shows "[pip-audit] Scanning..." then results
-- [ ] Ask Claude: "run uv sync" -- same "[pip-audit]" output appears
-- [ ] Ask Claude: "run uv pip install requests" -- same "[pip-audit]" output appears
-- [ ] Compound command: "cd /tmp && uv add httpx" -- does the glob still match?
+- [x] Ask Claude: "run uv add httpx" -- after install, STDERR shows "[pip-audit] Scanning..." then results
+  - **REVISED**: Originally diagnosed as wiring failure. Debug log (added 2026-06-15) shows `pip_audit_check` DOES fire on Bash commands — likely a **logic failure** (uvx pip-audit times out under sandbox network restrictions), not a wiring failure. Needs re-investigation with debug log.
+- [x] Ask Claude: "run uv sync" -- same "[pip-audit]" output appears
+  - **REVISED**: Same as above — hook likely fires but fails silently.
+- [x] Ask Claude: "run uv pip install requests" -- same "[pip-audit]" output appears
+  - **REVISED**: Same as above.
+- [x] Compound command: "cd /tmp && uv add httpx" -- does the glob still match?
+  - **REVISED**: Same as above. Also, `uv add` itself fails (no pyproject.toml in /tmp).
 
 ### Negative tests (hook should NOT fire)
 
-- [ ] "run uv lock" -- no [pip-audit] output (if: pattern doesn't match)
-- [ ] "run git status" -- no [pip-audit] output
-- [ ] "run uv add badpkg" where install fails -- hook fires but exits early
+- [x] "run uv lock" -- no [pip-audit] output (if: pattern doesn't match)
+  - **REVISED**: Debug log shows `pip_audit_check` fires on ALL Bash commands regardless of `if:` condition. So `if:` is not filtering — hook fires but produces no visible output. Needs re-investigation.
+- [x] "run git status" -- no [pip-audit] output
+  - **REVISED**: Same — hook fires (confirmed by debug log pattern), output not visible.
+- [x] "run uv add badpkg" where install fails -- hook fires but exits early
+  - **REVISED**: Hook fires (confirmed by debug log pattern). Sandbox network timeout caused the uv failure, not a missing package.
 
 ### Investigation notes
 
-If positive tests fail, the issue is in Claude Code's runtime matcher. Check if the `if:` pattern syntax is correct by comparing with working patterns like `scan_secrets_on_commit`'s `Bash(git commit*)`.
+~~If positive tests fail, the issue is in Claude Code's runtime matcher.~~ **REVISED 2026-06-15**: Debug logging reveals all `if:`-conditioned hooks fire on every matching Bash command — the `if:` condition does NOT filter invocations. Failures are **logic bugs** in the hooks themselves, not wiring issues. The original "file-write debug probe" may have been testing the wrong thing.
 
 ---
 
@@ -118,18 +142,24 @@ These fire once at session start, unconditionally (no matcher, no condition).
 
 #### Positive tests (should BLOCK)
 
-- [ ] "Read .env" -- BLOCKED
-- [ ] "Read .env.local" -- BLOCKED
-- [ ] "Read .env.production" -- BLOCKED
+- [x] "Read .env" -- BLOCKED
+  - **PARTIAL**: Hook blocks correctly (exit 2), but stderr message is not visible in console — only reaches Claude as a tool error. statusMessage flash not observed either. Block message is effectively MODEL-ONLY. Note: Bash tool blocks DO show stderr in console (see 3b); this appears to be a Claude Code UI difference in how Read vs Bash tool errors are rendered.
+- [x] "Read .env.local" -- BLOCKED (same stderr visibility issue)
+- [x] "Read .env.production" -- BLOCKED (same stderr visibility issue)
 
 #### Positive tests (should ALLOW)
 
-- [ ] "Read .env.example" -- allowed, STATUS may flash
-- [ ] "Read .env.sample" -- allowed, STATUS may flash
+- [x] "Read .env.example" -- allowed (not blocked; file contents shown)
+  - **PARTIAL**: statusMessage "Checking for .env file read..." did NOT flash.
+  - **INCONCLUSIVE on hook firing**: can't distinguish "hook fired and allowed" from "hook didn't fire." Correct outcome either way, but hook execution unconfirmed.
+- [x] "Read .env.sample" -- allowed (not blocked; file doesn't exist but not blocked)
+  - Same statusMessage and inconclusiveness issues.
 
 #### Negative tests
 
-- [ ] "Read src/main.py" -- allowed, STATUS may flash "Checking for .env file read..."
+- [x] "Read src/main.py" -- allowed (not blocked)
+  - **PARTIAL**: statusMessage still not visible. Appears to be a systemic issue — statusMessage never shows for this PreToolUse hook.
+  - **INCONCLUSIVE on hook firing**: same issue — correct outcome, but can't confirm hook ran.
 
 ---
 
@@ -141,23 +171,26 @@ These fire once at session start, unconditionally (no matcher, no condition).
 
 #### Positive tests (should BLOCK)
 
-- [ ] "Run pip install requests" -- BLOCKED
-- [ ] "Run cd /tmp && pip install requests" -- BLOCKED
+- [x] "Run pip install requests" -- BLOCKED. Full stderr block message visible in console (unlike Read tool blocks).
+- [x] "Run cd /tmp && pip install requests" -- BLOCKED (same console visibility)
 
 #### Known bugs (these BYPASS the block)
 
-- [ ] "Run pip3 install requests" -- bypasses (regex bug)
-- [ ] "Run python -m pip install requests" -- bypasses (regex bug)
-- [ ] "Run python3 -m pip install requests" -- bypasses (regex bug)
+- [x] "Run pip3 install requests" -- NOT bypassed (pip3 not installed, but hook didn't block either — bypass confirmed, just no pip3 binary to exploit)
+- [x] "Run python -m pip install requests" -- **NOT A BUG**: regex `(^|[^./\w])pip\s+install\b` already catches this (space before `pip` doesn't match exclusion set). Plan incorrectly listed as bypass; confirmed working in commit 9b2241b.
+- [x] "Run python3 -m pip install requests" -- **NOT A BUG**: same reason as above.
 
 #### Positive tests (should ALLOW)
 
-- [ ] "Run uv pip install requests" -- allowed (legitimate uv usage)
-- [ ] "Run ./.venv/bin/pip install requests" -- allowed (venv-qualified)
+- [x] "Run uv pip install requests" -- allowed (not blocked; network timeout from sandbox is unrelated)
+  - **INCONCLUSIVE on hook firing**: can't confirm hook ran and decided to allow vs. didn't fire.
+- [x] "Run ./.venv/bin/pip install requests" -- allowed (not blocked; no venv exists but irrelevant)
+  - **INCONCLUSIVE on hook firing**: same issue.
 
 #### Negative tests
 
-- [ ] "Run git status" -- hook fires (matcher=Bash), exits 0, unobservable
+- [x] "Run git status" -- allowed (not blocked)
+  - **INCONCLUSIVE on hook firing**: wrote "unobservable" originally, which is the problem — can't confirm hook ran. Correct outcome either way.
 
 ---
 
@@ -169,12 +202,15 @@ These fire once at session start, unconditionally (no matcher, no condition).
 
 #### Positive tests (should BLOCK)
 
-- [ ] Stage a file containing `sk-ant-` followed by random characters, then "git commit -m 'test'" -- BLOCKED
+- [x] Stage a file containing `sk-ant-` followed by random characters, then "git commit -m 'test'" -- BLOCKED
+  - **LOGIC FAILURE** (not wiring): Debug log confirms `scan_secrets_on_commit` FIRED, but commit went through unblocked. Hook runs `git diff --cached` but fails to detect the secret — likely a subprocess/context issue where staged state isn't visible to the hook.
 - [ ] Stage `fixtures/staged_secret.py`, then commit -- BLOCKED
+  - SKIPPED: file already tracked with no changes; can't isolate as a staging test. Test 1 already demonstrates the wiring failure.
 
 #### Positive tests (should PASS)
 
-- [ ] Stage a clean file (no secrets), then commit -- STDERR shows "PASSED"
+- [x] Stage a clean file (no secrets), then commit -- STDERR shows "PASSED"
+  - **REVISED**: Debug log confirms hook fires on all Bash commands. Hook likely fired and passed, but stderr "PASSED" message not visible in console. Use debug log to confirm in future runs.
 
 #### Negative tests (hook should NOT fire)
 

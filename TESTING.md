@@ -430,10 +430,12 @@ Always exits 0 -- informational only, never blocks.
 #### Positive tests
 
 - [ ] Edit a `.py` file with lint issues (e.g., unused import), let the turn complete -- file is auto-fixed after turn ends; confirm with `git diff`
+- [ ] Edit a `.py` file that already passes lint (no issues) -- no side effects, file is unchanged; confirm with `git diff` showing no changes
 
 #### Negative tests
 
 - [ ] Complete a turn without editing any `.py` files -- nothing to fix, no side effects
+- [ ] Edit a non-`.py` file with lint-like issues (e.g., `example.txt` containing unused variables) -- ruff_lint should not modify it; confirm file is unchanged
 
 #### Known limitation
 
@@ -451,6 +453,20 @@ These test interactions between multiple hooks and matcher behavior.
 
 - [ ] Ask Claude to EDIT a `.py` file -- observe STATUS messages for all 8 Edit|Write hooks. Confirm "Checking for test file..." does NOT appear.
 - [ ] Ask Claude to WRITE (create) a new `.py` file -- observe STATUS messages for all 8 Edit|Write hooks PLUS "Checking for test file..." from check_test_pair.
+
+### Step 0c Experiments (fold in here)
+
+> These resolve three open questions from the plan (lines 170-176 of `plans/hook_test_harness_plan.md`).
+> Record answers back into the Step 0c section of the plan after running.
+
+**Experiment A** (answers Q1: execution order + Q2: blocking cascade):
+
+- [ ] Edit a Python file containing both `# type: ignore` (triggers `block_suppressions`, exit 2) AND bad formatting (triggers `ruff_format`). In settings.json, `ruff_format.sh` comes before `block_suppressions.py`. Record: Does the file get reformatted? Does block_suppressions still block?
+- [ ] Swap the order in settings.json (block_suppressions first). Repeat. Does ruff_format still run after the block?
+
+**Experiment B** (answers Q3: side-effect visibility):
+
+- [ ] Edit a Python file with a type error on a line that ruff would reformat. After the edit, check: did pyright report the error on the original line number or the reformatted line number?
 
 ### Blocking cascade
 

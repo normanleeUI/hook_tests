@@ -82,6 +82,70 @@ class TestSecretPatternsProperties:
         text = f"sk-ant-{suffix}"
         assert PATTERNS["Anthropic API key"].search(text)
 
+    @given(
+        suffix=st.from_regex(r"[A-Za-z0-9]{20,40}", fullmatch=True),
+    )
+    @settings(max_examples=200)
+    def test_openai_key_always_matches(self, suffix: str) -> None:
+        """OpenAI key: sk- followed by >=20 alphanumeric chars (not starting with ant-)."""
+        text = f"sk-{suffix}"
+        assert PATTERNS["OpenAI API key"].search(text)
+
+    @given(
+        suffix=st.from_regex(r"[0-9A-Z]{16}", fullmatch=True),
+    )
+    @settings(max_examples=200)
+    def test_aws_key_always_matches(self, suffix: str) -> None:
+        """AWS access key ID: AKIA followed by exactly 16 uppercase alphanumeric chars."""
+        text = f"AKIA{suffix}"
+        assert PATTERNS["AWS access key ID"].search(text)
+
+    @given(
+        suffix=st.from_regex(r"[A-Za-z0-9]{36}", fullmatch=True),
+    )
+    @settings(max_examples=200)
+    def test_github_classic_pat_always_matches(self, suffix: str) -> None:
+        """GitHub classic PAT: ghp_ followed by exactly 36 alphanumeric chars."""
+        text = f"ghp_{suffix}"
+        assert PATTERNS["GitHub personal access token (classic)"].search(text)
+
+    @given(
+        suffix=st.from_regex(r"[A-Za-z0-9_]{82}", fullmatch=True),
+    )
+    @settings(max_examples=200)
+    def test_github_fine_grained_always_matches(self, suffix: str) -> None:
+        """GitHub fine-grained token: github_pat_ followed by exactly 82 chars."""
+        text = f"github_pat_{suffix}"
+        assert PATTERNS["GitHub fine-grained token"].search(text)
+
+    @given(
+        prefix=st.sampled_from(["xoxb", "xoxp", "xoxa", "xoxr", "xoxs"]),
+        suffix=st.from_regex(r"[A-Za-z0-9-]{10,30}", fullmatch=True),
+    )
+    @settings(max_examples=200)
+    def test_slack_token_always_matches(self, prefix: str, suffix: str) -> None:
+        """Slack token: xox[baprs]- followed by >=10 alphanumeric/hyphen chars."""
+        text = f"{prefix}-{suffix}"
+        assert PATTERNS["Slack token"].search(text)
+
+    @given(
+        suffix=st.from_regex(r"[0-9A-Za-z_-]{35}", fullmatch=True),
+    )
+    @settings(max_examples=200)
+    def test_google_api_key_always_matches(self, suffix: str) -> None:
+        """Google API key: AIza followed by exactly 35 chars."""
+        text = f"AIza{suffix}"
+        assert PATTERNS["Google API key"].search(text)
+
+    @given(
+        key_type=st.sampled_from(["RSA ", "EC ", "OPENSSH ", "DSA ", "PGP ", ""]),
+    )
+    @settings(max_examples=200)
+    def test_generic_private_key_always_matches(self, key_type: str) -> None:
+        """Generic private key block: PEM header with optional key type prefix."""
+        text = f"-----BEGIN {key_type}PRIVATE KEY-----"
+        assert PATTERNS["Generic private key block"].search(text)
+
     @given(length=st.integers(min_value=1, max_value=19))
     def test_short_anthropic_key_no_match(self, length: int) -> None:
         text = "sk-ant-" + "A" * length
@@ -132,7 +196,7 @@ class TestSecretPatternLengthProperties:
     """Hypothesis property tests for secret pattern length boundaries."""
 
     @given(length=st.integers(min_value=15, max_value=25))
-    @settings(max_examples=20)
+    @settings(max_examples=200)
     def test_anthropic_key_length_boundary(self, length: int) -> None:
         """Anthropic key pattern requires >=20 chars after the prefix."""
         text = "sk-ant-" + "A" * length
@@ -143,7 +207,7 @@ class TestSecretPatternLengthProperties:
             assert not match, f"Expected no match for suffix length {length}"
 
     @given(length=st.integers(min_value=30, max_value=40))
-    @settings(max_examples=20)
+    @settings(max_examples=200)
     def test_github_token_length_boundary(self, length: int) -> None:
         """GitHub classic PAT pattern requires exactly 36 chars after the prefix.
 

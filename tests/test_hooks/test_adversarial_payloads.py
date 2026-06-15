@@ -11,9 +11,10 @@ Three test classes:
 
 Known issue: many Python hooks lack try/except around json.loads() and
 .get() chains, so they crash (exit 1 + traceback) on non-dict JSON,
-None values, and invalid JSON. These are marked xfail to document the
-bugs without blocking the test suite. When a hook is fixed, its xfail
-becomes xpass and pytest will flag it for removal.
+None values, and invalid JSON. These are marked xfail(strict=True) to
+document the bugs without blocking the test suite. When a hook is fixed,
+its xfail becomes a strict xpass failure and pytest will flag it for
+removal.
 """
 
 import json
@@ -110,7 +111,12 @@ _CRASH_ON_JSON_NULL = _CRASH_ON_NON_DICT
 
 
 def _known_adversarial_crash(hook_name: str, payload: object) -> str | None:
-    """Return xfail reason if (hook, payload) is a known crash, else None."""
+    """Return xfail reason if (hook, payload) is a known crash, else None.
+
+    Only returns a reason for (hook, payload) combinations where the crash
+    is deterministic -- the hook is known to always crash on this exact
+    payload shape due to a documented root cause.
+    """
     if not isinstance(payload, dict):
         if hook_name in _CRASH_ON_NON_DICT:
             return "Hook lacks type check: crashes on non-dict JSON"
@@ -162,7 +168,7 @@ class TestNoCrashOnAdversarialInput:
     ) -> None:
         reason = _known_adversarial_crash(hook_name, payload)
         if reason:
-            request.applymarker(pytest.mark.xfail(reason=reason, strict=False))
+            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
 
         if interpreter == "bash":
             code, stderr, _ = run_bash_hook(hook_name, payload, timeout=5)
@@ -202,7 +208,7 @@ class TestNoCrashOnInvalidJson:
         """Direct subprocess call with raw string input (bypasses json.dumps in run_hook)."""
         reason = _known_invalid_json_crash(hook_name, raw_input)
         if reason:
-            request.applymarker(pytest.mark.xfail(reason=reason, strict=False))
+            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
 
         script = HOOKS_DIR / hook_name
         if not script.exists():
@@ -265,7 +271,7 @@ class TestNoCrashOnHypothesisPayloads:
         """High-value hooks must not crash on arbitrary JSON structures."""
         reason = _known_adversarial_crash(hook_name, payload)
         if reason:
-            request.applymarker(pytest.mark.xfail(reason=reason, strict=False))
+            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
 
         script = HOOKS_DIR / hook_name
         if not script.exists():

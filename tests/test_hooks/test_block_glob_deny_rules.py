@@ -222,3 +222,43 @@ class TestBlockGlobInputSource:
         }
         code, _, _ = run_hook(HOOK, payload)
         assert code == 2
+
+
+class TestBlockGlobDenyRulesGuardFilters:
+    """The hook should only act on Claude Code settings JSON files.
+
+    Both guard conditions must be met: the filename must contain
+    'settings' AND end with '.json' AND the path must contain
+    '/.claude/'. Files that fail any single condition should be skipped.
+    """
+
+    def test_non_matching_json_in_claude_dir_skipped(self):
+        """A .json file without 'settings' in the name should be skipped.
+
+        Uses tempfile directly to avoid pytest tmp_path embedding test
+        name (which could contain 'settings') in the file path.
+        """
+        with tempfile.TemporaryDirectory(prefix="hookguard_") as tmp_str:
+            tmp = Path(tmp_str)
+            assert "settings" not in tmp_str, (
+                f"temp dir path must not contain 'settings': {tmp_str}"
+            )
+            claude_dir = tmp / ".claude"
+            claude_dir.mkdir(parents=True, exist_ok=True)
+            config_file = claude_dir / "hooks.json"
+            config_file.write_text(
+                json.dumps({"permissions": {"deny": ["Read(**/.env)"]}})
+            )
+            code, _, _ = run_hook(HOOK, _make_payload(str(config_file)))
+            assert code == 0
+
+    def test_yaml_with_matching_name_in_claude_dir_skipped(self):
+        """A file with 'settings' in the name but not .json should be skipped."""
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            claude_dir = tmp / ".claude"
+            claude_dir.mkdir(parents=True, exist_ok=True)
+            yaml_file = claude_dir / "settings.yaml"
+            yaml_file.write_text("permissions:\n  deny:\n    - 'Read(**/.env)'")
+            code, _, _ = run_hook(HOOK, _make_payload(str(yaml_file)))
+            assert code == 0

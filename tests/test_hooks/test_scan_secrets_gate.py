@@ -277,3 +277,38 @@ class TestScanSecretsGateKnownBugs:
         _stage_file(git_repo, f"sk-ant-{'A' * 24}.py", "x = 42\n")
         code, _, _ = run_hook(HOOK, PAYLOAD, cwd=str(git_repo))
         assert code == 0
+
+
+class TestScanSecretsGitNotFound:
+    """When git is unavailable, the hook should fail open (exit 0).
+
+    If git is not installed, the hook cannot scan for secrets — but
+    blocking all commits is worse than skipping the scan. The hook
+    should let the commit proceed.
+    """
+
+    def test_git_not_found_exits_zero(self, git_repo: Path) -> None:
+        """When git is not on PATH, the hook should exit 0 (not block).
+
+        We use the project venv's python (which lives in a different
+        directory from /usr/bin/git) and set PATH to only include
+        that directory, so the hook's subprocess.run(["git", ...])
+        raises FileNotFoundError.
+        """
+
+        venv_python = str(
+            Path(__file__).resolve().parent.parent.parent / ".venv" / "bin" / "python3"
+        )
+        venv_bin = str(Path(venv_python).parent)
+        # Verify git is NOT in the venv bin directory
+        assert not Path(venv_bin, "git").exists(), (
+            "git found in venv bin -- test setup invalid"
+        )
+        code, _, _ = run_hook(
+            HOOK,
+            PAYLOAD,
+            cwd=str(git_repo),
+            interpreter=venv_python,
+            env={"PATH": venv_bin},
+        )
+        assert code == 0

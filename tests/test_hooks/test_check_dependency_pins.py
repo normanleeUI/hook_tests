@@ -321,3 +321,213 @@ class TestDependencyPinsEdgeCases:
         }
         code, _, _ = run_hook(HOOK, payload)
         assert code == 2
+
+
+class TestDependencyPinsRequirementsTxtSkipFilters:
+    """The hook should only check actual dependency specifiers in requirements.txt.
+
+    Standard requirements.txt features — comment lines (#), pip flags (-r,
+    --index-url), URL deps (http), and local path deps (/, .) — are not
+    dependency specifiers and must not be treated as unpinned deps.
+    """
+
+    def test_comment_lines_skipped(self):
+        """Lines starting with # in requirements.txt should be ignored."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": "# This is a comment\nrequests==2.32.3\n",
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_comment_line_not_treated_as_dep(self):
+        """A comment that looks like a bare dep name should not block."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": "# requests\n",
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_flag_lines_skipped(self):
+        """Lines starting with - (pip flags like -r, -e, --index-url) are skipped."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": "-r base.txt\n--index-url https://pypi.org/simple\nrequests==2.32.3\n",
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_url_lines_skipped(self):
+        """Lines starting with http (direct URL deps) are skipped."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": "https://example.com/my-package-1.0.tar.gz\nrequests==2.32.3\n",
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_absolute_path_lines_skipped(self):
+        """Lines starting with / (absolute local paths) are skipped."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": "/opt/local/my-package\nrequests==2.32.3\n",
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_relative_path_lines_skipped(self):
+        """Lines starting with . (relative local paths like -e .) are skipped."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": "./local-package\nrequests==2.32.3\n",
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_mixed_skip_and_real_deps(self):
+        """Mix of skippable lines and real deps -- only real deps checked."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": (
+                    "# pinned deps\n"
+                    "-r base.txt\n"
+                    "https://example.com/pkg.tar.gz\n"
+                    "/local/pkg\n"
+                    "./editable-pkg\n"
+                    "requests==2.32.3\n"
+                ),
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_requirements_txt_bounded_range_passes(self):
+        """Bounded range >=X,<Y in requirements.txt should pass."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": "pandas>=2.0,<3\n",
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_requirements_txt_open_gte_only_blocks(self):
+        """Open-ended >= without < in requirements.txt should block."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": "pandas>=2.0\n",
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 2
+
+    def test_requirements_txt_lt_only_blocks(self):
+        """A line with only < (no >=) in requirements.txt should block as unpinned."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.txt",
+                "new_string": "pandas<3\n",
+            },
+            "tool_response": {"filePath": "/project/requirements.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 2
+
+
+class TestDependencyPinsEarlyExitGuards:
+    """The hook should silently pass (exit 0) for non-actionable inputs.
+
+    Non-dependency files, missing paths, and malformed payloads are not
+    actionable — the hook has nothing to check, so it must not block.
+    """
+
+    def test_invalid_json_returns_zero(self):
+        """JSONDecodeError should return 0, not block."""
+        import subprocess
+
+        from tests.test_hooks.hook_runner import HOOKS_DIR
+
+        script = HOOKS_DIR / HOOK
+        result = subprocess.run(
+            ["python3", str(script)],
+            input="NOT VALID JSON {{{",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
+
+    def test_missing_file_path_returns_zero(self):
+        """Payload with no file_path or filePath should return 0."""
+        payload = {"tool_input": {"new_string": "requests"}}
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_non_dep_file_returns_zero(self, edit_payload):
+        """Non-dependency file should return 0 even with unpinned content."""
+        code, _, _ = run_hook(HOOK, edit_payload("/project/config.yaml", "requests"))
+        assert code == 0
+
+    def test_non_txt_requirements_like_file_passes(self):
+        """A file named requirements.json should not be treated as requirements.txt."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/requirements.json",
+                "new_string": "requests",
+            },
+            "tool_response": {"filePath": "/project/requirements.json"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_random_txt_file_not_treated_as_requirements(self):
+        """A .txt file not starting with 'requirements' should pass."""
+        payload = {
+            "tool_input": {
+                "file_path": "/project/notes.txt",
+                "new_string": "requests",
+            },
+            "tool_response": {"filePath": "/project/notes.txt"},
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+
+class TestDependencyPinsPyprojectParserEdgeCases:
+    """Gap-filling tests for pyproject.toml parser edge cases."""
+
+    def test_pyproject_comment_in_deps_skipped(self, edit_payload):
+        """Comment lines inside dependencies array should not be flagged."""
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload(
+                "/project/pyproject.toml",
+                'dependencies = [\n    # this is a comment\n    "requests==2.32.3",\n]',
+            ),
+        )
+        assert code == 0

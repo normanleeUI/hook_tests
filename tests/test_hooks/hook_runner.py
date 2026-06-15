@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-HOOKS_DIR = Path.home() / ".claude" / "hooks"
+HOOKS_DIR = Path(os.environ.get("HOOKS_DIR", str(Path.home() / ".claude" / "hooks")))
 
 
 def run_hook(

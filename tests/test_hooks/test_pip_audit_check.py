@@ -242,3 +242,86 @@ class TestPipAuditCheckKnownBugs:
         """Step 0d fail-safe: null command should exit 0, not crash."""
         code, _, _ = run_hook(HOOK, {"tool_input": {"command": None}})
         assert code == 0
+
+
+class TestPipAuditCheckGateEngagement:
+    """Each trigger command should independently engage the hook.
+
+    The hook should run pip-audit after any of: 'uv add', 'uv sync',
+    or 'uv pip install'. These tests verify each command engages the
+    hook on its own. Not marked @network because the engagement message
+    is written before the subprocess call.
+    """
+
+    def test_uv_add_alone_engages(self, post_tool_payload):
+        """'uv add' alone (without 'uv sync' or 'uv pip install') should engage."""
+        payload = post_tool_payload("uv add requests")
+        stderr = _run_hook_expecting_engagement(payload, timeout=10)
+        assert "[pip-audit]" in stderr, "Hook should engage for 'uv add' command"
+
+    def test_uv_sync_alone_engages(self, post_tool_payload):
+        """'uv sync' alone (without 'uv add' or 'uv pip install') should engage."""
+        payload = post_tool_payload("uv sync")
+        stderr = _run_hook_expecting_engagement(payload, timeout=10)
+        assert "[pip-audit]" in stderr, "Hook should engage for 'uv sync' command"
+
+    def test_uv_pip_install_alone_engages(self, post_tool_payload):
+        """'uv pip install' alone should engage."""
+        payload = post_tool_payload("uv pip install requests")
+        stderr = _run_hook_expecting_engagement(payload, timeout=10)
+        assert "[pip-audit]" in stderr, (
+            "Hook should engage for 'uv pip install' command"
+        )
+
+
+class TestPipAuditCheckSubprocessResults:
+    """The hook should pass through pip-audit's exit code.
+
+    Clean audit (exit 0) means no vulnerabilities — hook should exit 0.
+    Vulnerabilities found (exit nonzero) — hook should exit nonzero.
+    Uses a fake ``uvx`` script to test without network access.
+    """
+
+    @staticmethod
+    def _make_fake_uvx(tmp_path, exit_code: int, stdout: str = "", stderr: str = ""):
+        """Create a fake 'uvx' script that returns the given exit code."""
+        fake_uvx = tmp_path / "uvx"
+        fake_uvx.write_text(
+            f"#!/bin/sh\necho '{stdout}'\necho '{stderr}' >&2\nexit {exit_code}\n"
+        )
+        fake_uvx.chmod(0o755)
+        return str(tmp_path)
+
+    def test_audit_clean_returns_zero(self, post_tool_payload, tmp_path):
+        """When pip-audit exits 0 (clean), hook should return 0."""
+        fake_bin = self._make_fake_uvx(tmp_path, 0, stdout="pkg1\npkg2\npkg3")
+        # PATH: fake bin first (for uvx), then real bins (for python)
+        real_path = os.environ.get("PATH", "")
+        payload = post_tool_payload("uv add requests")
+        code, stderr, _ = run_hook(
+            HOOK,
+            payload,
+            env={"PATH": f"{fake_bin}:{real_path}"},
+            timeout=15,
+        )
+        assert code == 0
+        assert "[pip-audit]" in stderr
+
+    def test_audit_vuln_found_returns_nonzero(self, post_tool_payload, tmp_path):
+        """When pip-audit exits 1 (vulns found), hook should return nonzero."""
+        fake_bin = self._make_fake_uvx(
+            tmp_path,
+            1,
+            stdout="pkg1  1.0  CVE-2024-1234",
+            stderr="VULNERABILITIES FOUND",
+        )
+        real_path = os.environ.get("PATH", "")
+        payload = post_tool_payload("uv add requests")
+        code, stderr, _ = run_hook(
+            HOOK,
+            payload,
+            env={"PATH": f"{fake_bin}:{real_path}"},
+            timeout=15,
+        )
+        assert code != 0, "Hook should return nonzero when pip-audit finds vulns"
+        assert "[pip-audit]" in stderr

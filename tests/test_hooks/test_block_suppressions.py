@@ -365,3 +365,39 @@ class TestJustificationBoundary:
         }
         code, _, _ = run_hook(HOOK, payload)
         assert code == 0
+
+
+class TestBlockSuppressionsEarlyExitGuards:
+    """The hook should silently pass (exit 0) for non-actionable inputs.
+
+    Malformed JSON, missing file paths, and empty content are not
+    actionable — the hook has nothing to check, so it must not block.
+    """
+
+    def test_invalid_json_returns_zero(self):
+        """JSONDecodeError in main() should return 0, not block."""
+        # Passing a payload that will be re-serialized, but the hook reads
+        # from stdin -- send malformed JSON directly via subprocess
+        import subprocess
+        from tests.test_hooks.hook_runner import HOOKS_DIR
+
+        script = HOOKS_DIR / HOOK
+        result = subprocess.run(
+            ["python3", str(script)],
+            input="NOT VALID JSON {{{",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
+
+    def test_missing_file_path_returns_zero(self):
+        """Payload with no file_path should return 0, not block."""
+        payload = {"tool_input": {"new_string": "x = 1"}}
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_empty_new_string_returns_zero(self, edit_payload):
+        """Empty new_string on a .py file should return 0, not block."""
+        code, _, _ = run_hook(HOOK, edit_payload("/project/src/foo.py", ""))
+        assert code == 0

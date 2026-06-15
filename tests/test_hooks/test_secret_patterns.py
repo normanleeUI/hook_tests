@@ -128,6 +128,37 @@ class TestSecretPatternsBoundaries:
         assert PATTERNS["Generic private key block"].search(text)
 
 
+class TestSecretPatternLengthProperties:
+    """Hypothesis property tests for secret pattern length boundaries."""
+
+    @given(length=st.integers(min_value=15, max_value=25))
+    @settings(max_examples=20)
+    def test_anthropic_key_length_boundary(self, length: int) -> None:
+        """Anthropic key pattern requires >=20 chars after the prefix."""
+        text = "sk-ant-" + "A" * length
+        match = PATTERNS["Anthropic API key"].search(text)
+        if length >= 20:
+            assert match, f"Expected match for suffix length {length}"
+        else:
+            assert not match, f"Expected no match for suffix length {length}"
+
+    @given(length=st.integers(min_value=30, max_value=40))
+    @settings(max_examples=20)
+    def test_github_token_length_boundary(self, length: int) -> None:
+        """GitHub classic PAT pattern requires exactly 36 chars after the prefix.
+
+        The regex is ghp_[A-Za-z0-9]{36} which matches exactly 36 chars.
+        For length < 36, no match. For length >= 36, the regex matches
+        the first 36 chars (the pattern has no end anchor).
+        """
+        text = "ghp_" + "A" * length
+        match = PATTERNS["GitHub personal access token (classic)"].search(text)
+        if length >= 36:
+            assert match, f"Expected match for suffix length {length}"
+        else:
+            assert not match, f"Expected no match for suffix length {length}"
+
+
 class TestSecretPatternsCompleteness:
     """Verify the test-local PATTERNS dict is complete and matches the hook source."""
 

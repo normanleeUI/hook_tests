@@ -6,6 +6,7 @@ pre-approved patterns (exit 0), and skips non-.py files and exempt
 directories.  Uses both explicit examples and hypothesis property tests.
 """
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -304,4 +305,63 @@ class TestBlockSuppressionsEdgeCases:
             HOOK,
             edit_payload("/project/src/foo.py", f"x = 1  {comment}"),
         )
+        assert code == 0
+
+
+class TestJustificationBoundary:
+    """Boundary tests for justification marker acceptance and rejection."""
+
+    VALID_JUSTIFICATIONS = [
+        _ti("override", "# mypy-bug: metaclass conflict"),
+        _ti("name-defined", "# known-issue: dynamic import"),
+        _ti("misc", "# sqlmodel-metaclass: Table base"),
+        _nq("E501", "# noqa-reason: URL too long to break"),
+    ]
+
+    INVALID_NEAR_MISSES = [
+        _ti("override", "# mypy_bug: underscore not hyphen"),
+        _ti("override", "# mypybug: no hyphen at all"),
+        "# type" + ": ignore  # this is just a comment",
+        _ti("override", "# reason but no marker keyword"),
+        _nq("E501", "# reason: wrong keyword format"),
+        "# no" + "qa  # noqa_reason: underscore not hyphen",
+    ]
+
+    @pytest.mark.parametrize("comment", VALID_JUSTIFICATIONS)
+    def test_valid_justification_passes(self, edit_payload, comment: str) -> None:
+        """Properly justified suppression comments should be allowed."""
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload("/project/src/mod.py", f"x = 1  {comment}"),
+        )
+        assert code == 0
+
+    @pytest.mark.parametrize("comment", INVALID_NEAR_MISSES)
+    def test_invalid_near_miss_blocks(self, edit_payload, comment: str) -> None:
+        """Near-miss justifications that lack a valid marker keyword should be blocked."""
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload("/project/src/mod.py", f"x = 1  {comment}"),
+        )
+        assert code == 2
+
+    @given(
+        marker=st.sampled_from(["mypy-bug", "known-issue", "sqlmodel-metaclass"]),
+        noise=st.text(
+            alphabet=st.characters(whitelist_categories=("L", "N", "P")),
+            min_size=1,
+            max_size=30,
+        ),
+    )
+    @settings(max_examples=50, deadline=None)
+    def test_justification_with_arbitrary_reason_text(
+        self, marker: str, noise: str
+    ) -> None:
+        """Any reason text after a valid marker keyword should pass."""
+        comment = "# type" + f": ignore[misc]  # {marker}: {noise}"
+        code_str = f"x = 1  {comment}\n"
+        payload = {
+            "tool_input": {"file_path": "/project/src/mod.py", "new_string": code_str}
+        }
+        code, _, _ = run_hook(HOOK, payload)
         assert code == 0

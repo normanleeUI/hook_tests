@@ -1,7 +1,5 @@
 """Tests for tier-2 informational hooks: check_docstrings, check_random_seeds, check_test_pair."""
 
-import json
-import os
 import tempfile
 from pathlib import Path
 
@@ -582,3 +580,104 @@ class TestCheckTestPairDepth:
         assert rc == 0
         assert "tdd reminder" not in stdout.lower()
         assert "no matching test file" not in stdout.lower()
+
+
+# =====================================================================
+# TestDocstringTriviality
+# =====================================================================
+
+
+class TestDocstringTriviality:
+    """Property test: trivial functions (<=2 statements) should not warn about missing docstrings."""
+
+    @given(n_statements=st.integers(min_value=1, max_value=6))
+    @settings(max_examples=50, deadline=None)
+    def test_triviality_threshold(self, n_statements: int) -> None:
+        """Functions with <=2 total body statements are trivial (no warning).
+
+        We generate n_statements assignment lines plus a return statement,
+        so total_statements = n_statements + 1. The hook's threshold is
+        <=2 total body statements (excluding docstring).
+        """
+        body = "\n".join(f"    x{i} = {i}" for i in range(n_statements))
+        code = f"def public_func(arg):\n{body}\n    return arg\n"
+        total_statements = n_statements + 1
+
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "module.py"
+            f.write_text(code)
+            payload = _make_payload(str(f))
+            rc, stderr, stdout = run_hook("check_docstrings.py", payload)
+            assert rc == 0
+            if total_statements <= 2:
+                assert "missing docstrings" not in stdout.lower()
+            else:
+                assert "missing docstrings" in stdout.lower()
+
+
+# =====================================================================
+# TestSeedDetectionContext
+# =====================================================================
+
+
+class TestSeedDetectionContext:
+    """Test that the seed hook distinguishes real seed calls from comments and strings."""
+
+    SEED_IN_CODE = [
+        "np.random.seed(42)",
+        "random.seed(12345)",
+        "torch.manual_seed(0)",
+        "rng = np.random.default_rng(42)",
+    ]
+
+    SEED_IN_COMMENT = [
+        "# np.random.seed(42)  -- disabled for now",
+        "# TODO: add random.seed() call here",
+    ]
+
+    SEED_IN_STRING = [
+        's = "np.random.seed(42)"',
+        "doc = '''Use np.random.seed(42) to set seed'''",
+    ]
+
+    @pytest.mark.parametrize("seed_line", SEED_IN_CODE)
+    def test_real_seed_suppresses_warning(self, tmp_path: Path, seed_line: str) -> None:
+        """Seed call in actual code should suppress the missing-seed warning."""
+        code = f"import numpy as np\nimport random\nimport torch\n\n{seed_line}\nx = np.random.randn(10)\n"
+        f = tmp_path / "gen.py"
+        f.write_text(code)
+        rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
+        assert rc == 0
+        assert "no seed is set" not in stdout.lower()
+
+    @pytest.mark.parametrize("seed_line", SEED_IN_COMMENT)
+    @pytest.mark.xfail(
+        reason="hook bug: regex cannot distinguish code from comments",
+        strict=True,
+    )
+    def test_commented_seed_should_still_warn(
+        self, tmp_path: Path, seed_line: str
+    ) -> None:
+        """Commented-out seed calls should not count as real seeding per spec intent."""
+        code = f"import numpy as np\n\n{seed_line}\nx = np.random.randn(10)\n"
+        f = tmp_path / "gen.py"
+        f.write_text(code)
+        rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
+        assert rc == 0
+        assert "no seed is set" in stdout.lower()
+
+    @pytest.mark.parametrize("seed_line", SEED_IN_STRING)
+    @pytest.mark.xfail(
+        reason="hook bug: regex cannot distinguish code from comments/strings",
+        strict=True,
+    )
+    def test_string_seed_should_still_warn(
+        self, tmp_path: Path, seed_line: str
+    ) -> None:
+        """Seed calls inside string literals should not count as real seeding per spec intent."""
+        code = f"import numpy as np\n\n{seed_line}\nx = np.random.randn(10)\n"
+        f = tmp_path / "gen.py"
+        f.write_text(code)
+        rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
+        assert rc == 0
+        assert "no seed is set" in stdout.lower()

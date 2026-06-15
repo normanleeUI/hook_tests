@@ -249,22 +249,24 @@ class TestPipAuditCheckGateEngagement:
 
     The hook should run pip-audit after any of: 'uv add', 'uv sync',
     or 'uv pip install'. These tests verify each command engages the
-    hook on its own. Not marked @network because the engagement message
-    is written before the subprocess call.
+    hook on its own.
     """
 
+    @pytest.mark.network
     def test_uv_add_alone_engages(self, post_tool_payload):
         """'uv add' alone (without 'uv sync' or 'uv pip install') should engage."""
         payload = post_tool_payload("uv add requests")
         stderr = _run_hook_expecting_engagement(payload, timeout=10)
         assert "[pip-audit]" in stderr, "Hook should engage for 'uv add' command"
 
+    @pytest.mark.network
     def test_uv_sync_alone_engages(self, post_tool_payload):
         """'uv sync' alone (without 'uv add' or 'uv pip install') should engage."""
         payload = post_tool_payload("uv sync")
         stderr = _run_hook_expecting_engagement(payload, timeout=10)
         assert "[pip-audit]" in stderr, "Hook should engage for 'uv sync' command"
 
+    @pytest.mark.network
     def test_uv_pip_install_alone_engages(self, post_tool_payload):
         """'uv pip install' alone should engage."""
         payload = post_tool_payload("uv pip install requests")

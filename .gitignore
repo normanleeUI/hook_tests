@@ -10,6 +10,8 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
+mutation_run_log.jsonl
 .claude/
 prompts/
 

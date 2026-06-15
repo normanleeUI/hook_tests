@@ -128,3 +128,7 @@ The following test classes were added to kill mutants that initially survived:
 # Single hook
 .venv/bin/python tests/test_hooks/run_mutations.py block_bare_pip.py
 ```
+
+Each run appends results to `tests/test_hooks/mutation_run_log.jsonl`
+(gitignored).  The summary table shows deltas from the previous run so
+you can see kill-rate improvements across iterations.

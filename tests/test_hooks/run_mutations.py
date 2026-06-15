@@ -12,6 +12,7 @@ If hook_name is omitted, runs against all 8 blocking hooks.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -24,6 +25,7 @@ from pathlib import Path
 
 HOOKS_DIR = Path.home() / ".claude" / "hooks"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+RUN_LOG = PROJECT_ROOT / "tests" / "test_hooks" / "mutation_run_log.jsonl"
 
 HOOK_TEST_MAP: dict[str, list[str]] = {
     "block_bare_pip.py": ["tests/test_hooks/test_block_bare_pip.py"],
@@ -528,21 +530,53 @@ def main() -> int:
                     print(f"      Original: {r.mutation.original_line.strip()}")
                     print(f"      Mutated:  {r.mutation.mutated_line.strip()}")
 
+    # Load previous run for delta comparison
+    prev_run = _load_previous_run()
+
     print(f"\n\n{'=' * 60}")
     print("OVERALL SUMMARY")
     print(f"{'=' * 60}")
-    print(f"{'Hook':<35} {'Total':>5} {'Killed':>6} {'Survived':>8} {'Rate':>6}")
-    print("-" * 65)
+    header = f"{'Hook':<35} {'Total':>5} {'Killed':>6} {'Survived':>8} {'Rate':>6}"
+    if prev_run:
+        header += f"  {'Prev':>6}  {'Delta':>6}"
+    print(header)
+    print("-" * len(header))
     for hook_name, results in all_results.items():
-        print(
+        line = (
             f"{hook_name:<35} {results.total:>5} {results.killed:>6} "
             f"{results.survived:>8} {results.kill_rate:>5.1f}%"
         )
+        if prev_run and hook_name in prev_run:
+            prev_rate = prev_run[hook_name]["kill_rate"]
+            delta = results.kill_rate - prev_rate
+            sign = "+" if delta > 0 else ""
+            line += f"  {prev_rate:>5.1f}%  {sign}{delta:>5.1f}%"
+        print(line)
 
-    json_path = Path(tempfile.gettempdir()) / "mutmut_raw_results.json"
-    json_data = {}
+    _append_run_log(all_results)
+
+    return 0
+
+
+def _load_previous_run() -> dict | None:
+    """Load the most recent entry from the run log, if it exists."""
+    if not RUN_LOG.exists():
+        return None
+    lines = RUN_LOG.read_text().strip().splitlines()
+    if not lines:
+        return None
+    last = json.loads(lines[-1])
+    return last.get("hooks", {})
+
+
+def _append_run_log(all_results: dict[str, HookResults]) -> None:
+    """Append this run's results to the persistent JSONL log."""
+    entry = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "hooks": {},
+    }
     for hook_name, results in all_results.items():
-        json_data[hook_name] = {
+        entry["hooks"][hook_name] = {
             "total": results.total,
             "killed": results.killed,
             "survived": results.survived,
@@ -562,10 +596,15 @@ def main() -> int:
                 if r.status == "survived"
             ],
         }
-    json_path.write_text(json.dumps(json_data, indent=2) + "\n")
-    print(f"\nDetailed results written to {json_path}")
 
-    return 0
+    run_number = 1
+    if RUN_LOG.exists():
+        run_number = len(RUN_LOG.read_text().strip().splitlines()) + 1
+    entry["run"] = run_number
+
+    with open(RUN_LOG, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    print(f"\nRun #{run_number} appended to {RUN_LOG}")
 
 
 if __name__ == "__main__":

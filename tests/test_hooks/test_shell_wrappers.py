@@ -21,7 +21,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from tests.test_hooks.hook_runner import HOOKS_DIR, run_bash_hook
+from tests.test_hooks.hook_runner import run_bash_hook
 
 
 def edit_payload(file_path: str) -> dict:

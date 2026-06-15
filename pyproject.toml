@@ -10,6 +10,7 @@ dev = [
     "hypothesis==6.122.3",
     "mutmut>=3.2,<4",
     "pytest-xdist>=3.8.0",
+    "ruff>=0.8.0",
 ]
 
 [tool.pytest.ini_options]
@@ -18,3 +19,8 @@ addopts = "-ra -q -n6 -m 'not network'"
 markers = [
     "network: tests that make real network calls (e.g. pip-audit hitting PyPI)",
 ]
+
+[tool.ruff]
+# src/has_suppressions.py is an intentional fixture with bad code for testing
+# suppression detection; it must not be linted.
+exclude = ["src/has_suppressions.py"]

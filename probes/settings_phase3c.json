@@ -1,0 +1,89 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pytest*)",
+      "Bash(python -m pytest*)",
+      "Bash(uv sync*)",
+      "Bash(uv venv*)",
+      "Bash(uv init*)",
+      "Bash(uv lock*)",
+      "Bash(uvx *)",
+      "Bash(ruff *)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git show*)",
+      "Bash(git branch*)"
+    ],
+    "deny": [
+      "Edit(/home/user/projects/example-lib/.env)",
+      "Edit(/home/user/projects/example-lib-worktree/.env)",
+      "Edit(/home/user/projects/example-app/.env)",
+      "Edit(/home/user/projects/example-app/backend/.env)",
+      "Write(/home/user/projects/example-lib/.env)",
+      "Write(/home/user/projects/example-lib-worktree/.env)",
+      "Write(/home/user/projects/example-app/.env)",
+      "Write(/home/user/projects/example-app/backend/.env)",
+      "Read(~/.bashrc)",
+      "Read(~/.zshrc)",
+      "Read(~/.profile)",
+      "Read(~/.bash_profile)",
+      "Edit(~/.bashrc)",
+      "Edit(~/.zshrc)",
+      "Edit(~/.profile)",
+      "Edit(~/.bash_profile)",
+      "Write(~/.bashrc)",
+      "Write(~/.zshrc)",
+      "Write(~/.profile)",
+      "Write(~/.bash_profile)",
+      "Edit(//etc/**)",
+      "Write(//etc/**)",
+      "Edit(//usr/**)",
+      "Write(//usr/**)",
+      "Edit(//bin/**)",
+      "Write(//bin/**)",
+      "Bash(curl * | bash)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | python)",
+      "Bash(curl * | python3)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PROBE_ID=session_start python3 /home/user/projects/hook_tests/probes/session_start_probe.py",
+            "statusMessage": "PROBE SessionStart"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python3 /home/user/.claude/statusline.py"
+  },
+  "enabledPlugins": {},
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "allowWrite": [
+        "~/.cache/uv",
+        "~/.cache/pip-audit",
+        "~/.local/share/uv/tools"
+      ]
+    }
+  },
+  "effortLevel": "high",
+  "awaySummaryEnabled": false,
+  "autoUpdatesChannel": "stable",
+  "editorMode": "normal",
+  "verbose": true,
+  "autoCompactEnabled": false,
+  "remoteControlAtStartup": false,
+  "model": "claude-opus-4-6"
+}

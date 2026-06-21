@@ -171,6 +171,30 @@ Copy this for each probe result:
 - Notes:
 ```
 
+## Phase 2 probe matrix (P9–P13)
+
+These probes validate assumptions that the channel redesign fix strategies depend on.
+
+All P9/P10/P11/P13 use `probes/channel_probe.py`, differentiated by `PROBE_ID` and `PROBE_EXIT` env vars.
+P12 uses `probes/hookspecific_probe.py`.
+
+Each probe logs full stdin JSON to `/tmp/probe_input_<id>.json` (or `PROBE_DUMP_DIR` if set).
+
+| Probe | Event | Matcher | Exit | Purpose |
+|-------|-------|---------|------|---------|
+| P9 | PreToolUse | Edit | 2 | Validate Strategy A |
+| P10 | PreToolUse | Write | 2 | Validate Strategy A |
+| P11 | PreToolUse | WebFetch | 2 | Validate Strategy C guard |
+| P12 | PostToolUse | Edit | 0 | Test hookSpecificOutput.additionalContext |
+| P13 | PreToolUse | Bash | 2 | Test `if:` condition filtering (with `if: Bash(*probe*)`) |
+
+### Step 0c Experiments
+
+| Experiment | Question | Method |
+|---|---|---|
+| A | Do PostToolUse hooks in the same group run sequentially? Does a blocked hook stop later hooks? | Edit a .py file with `# type: ignore` (triggers block_suppressions, exit 2) AND bad formatting (triggers ruff_format). Check: does ruff reformat? Does block_suppressions still block? |
+| B | Do subsequent hooks see prior hooks' file modifications? | Edit a .py file with a type error on a line ruff would reformat. After edit, check: did pyright report the original or reformatted line number? |
+
 ## Teardown
 
 After all tests, restore the original `~/.claude/settings.json`. A backup should be saved before starting:

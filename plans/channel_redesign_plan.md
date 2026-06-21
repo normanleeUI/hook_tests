@@ -261,10 +261,45 @@ Based on Step 1 results:
 
 Update this plan document with confirmed strategies before proceeding to Phase 2.
 
+#### Step 0c Experiment Answers
+
+| Experiment | Question | Answer | Evidence |
+|---|---|---|---|
+| A | Do PostToolUse hooks in the same group run sequentially? Does a blocked hook stop later hooks? | **Yes, sequential. No, a blocked hook does NOT stop later hooks.** Hook execution order matches the array order in settings.json. A hook exiting 2 informs Claude but does not revert the edit or prevent subsequent hooks from running. PostToolUse exit-2 is cosmetic — the edit is already applied. | ruff_format (earlier in array) reformatted the file before block_suppressions (later) ran. The block did not revert ruff's changes. See `probes/PROBE_RESULTS_PHASE2.md` Experiment A. |
+| B | Do subsequent hooks see prior hooks' file modifications? | **Yes.** Hooks operate on the actual file on disk, not on a snapshot. Each hook sees all prior hooks' file modifications. | ruff_format changed spacing and quotes on disk; subsequent file reads reflected ruff's version, not the original edit. See `probes/PROBE_RESULTS_PHASE2.md` Experiment B. |
+
+#### Confirmed Strategies (2026-06-21)
+
+All probes succeeded. **No fallback strategies are needed.**
+
+| Hook | Strategy | Evidence | Rationale | Step |
+|---|---|---|---|---|
+| `check_dependency_pins.py` | **A** — PreToolUse promotion | P9/P10 (AC-PRB-01, AC-PRB-02, AC-PRB-05, AC-PRB-06) | Must *prevent* unpinned deps, not report after the fact. Already inspects `tool_input.new_string`/`tool_input.content` — no code changes needed, wiring-only. | 4 |
+| `block_suppressions.py` | **A** — PreToolUse promotion | P9/P10 (AC-PRB-01, AC-PRB-02) | Must *prevent* suppressions. Already inspects `tool_input` fields. Falls back to `tool_input.file_path` when `tool_response.filePath` is absent (load-bearing fallback). | 4 |
+| `block_glob_deny_rules.py` | **A** — PreToolUse promotion (file reconstruction) | P9/P10 (AC-PRB-01, AC-PRB-02) | Security guard — dangerous globs must never exist on disk, even transiently. File reconstruction (read current file + apply proposed edit in memory) lets the hook inspect the result without touching disk. Strategy B is impossible (JSON doesn't support `#` comments). Strategy C would allow transient dangerous state. | 4 |
+| `check_docstrings.py` | **B** — Inline injection | Exp A (AC-PRB-08), Exp B (AC-PRB-09) | Informational — missing docstrings aren't blockable offenses. Inline `# HOOK:DOCSTRING:` comments place findings at the relevant line. Must run after `ruff_format` (already true per array order). | 5 |
+| `check_random_seeds.py` | **B** — Inline injection | Exp A (AC-PRB-08), Exp B (AC-PRB-09) | Informational — unseeded random is a reproducibility nudge. Same injection pattern as docstrings. | 5 |
+| `pyright_check.sh` | **B** — Inline injection | Exp A (AC-PRB-08), Exp B (AC-PRB-09) | Informational, line-specific findings. Requires running external tool on the already-written file. Blocking would be too aggressive for intermediate edits. | 6 |
+| `bandit_check.sh` | **B** — Inline injection | Exp A (AC-PRB-08), Exp B (AC-PRB-09) | Informational, line-specific findings. Configured with `-ll` (low+ severity) — blocking every finding would be disruptive. | 6 |
+| `pip_audit_check.py` | **C** — State-file gating | P11 (AC-PRB-03), P13 (AC-PRB-07) | Runs after `uv add/sync` completes — can't audit on PreToolUse (deps not installed yet). Findings are project-wide (no file to inject into). Guard uses `if:` condition for performance. | 7 |
+| `scan_prompt_injection.py` | **No redesign needed** | P12 (AC-PRB-04) | hookSpecificOutput.additionalContext reaches the model as `<system-reminder>`. Current channel works. **Step 8 SKIPPED.** See note below. | 8 (skipped) |
+| `block_read_env.py` | **D** — Dual-wiring | P9/P10 (PreToolUse exit-2 works) | Closes circumvention path where `Bash(cat .env)` bypasses the Read tool block. Broad pattern matching preferred — false positives are cheap, false negatives leak secrets. | 9 |
+| `check_test_pair.py` | **UNWIRE** (obsolete) | N/A | Hook is obsolete per plan context. | 10 |
+
+#### Notes
+
+**Step 8 skip rationale**: P12 confirmed hookSpecificOutput.additionalContext works (AC-PRB-04). The plan's decision table specifies: "P12 confirms hookSpecificOutput works → scan_prompt_injection needs NO redesign." P11 *also* confirmed a PreToolUse+WebFetch guard could work — this validates the guard mechanism for future use if blocking is ever needed, but informing the model is sufficient for a heuristic scanner with expected false positives. One caveat: P12 discovered that `hookEventName` is a required field in hookSpecificOutput (undocumented). Verify `scan_prompt_injection.py` already includes `hookEventName` in its output; if not, a one-line fix is needed (not a strategy change).
+
+**Strategy B ordering constraint**: All four inline injection hooks must remain AFTER `ruff_format.sh` in the PostToolUse Edit|Write array. Experiment B confirmed hooks see prior modifications — `ruff_format` reformats the file first, then injection hooks operate on the reformatted code with correct line numbers.
+
+**`if:` conditions for guard hooks**: P13 confirmed glob-style `if:` filtering works (AC-PRB-07). `pip_audit_guard.py` can use `if: Bash(*uv add*|*uv sync*|*uv pip*)` to skip non-matching commands without reading stdin.
+
+**Key discovery — hookEventName**: hookSpecificOutput requires a `hookEventName` field (undocumented, discovered during P12). Any hook emitting hookSpecificOutput must include `hookEventName` sourced from the input payload's `hook_event_name`. This applies to `scan_prompt_injection.py` (current) and any future hooks using this channel.
+
 #### Verification
-- Each hook has a confirmed strategy (no ambiguity)
-- Fallback strategies documented if needed
-- Step 0c questions resolved
+- Each hook has exactly one confirmed strategy — no ambiguity
+- No fallback strategies needed (all probes passed)
+- Step 0c questions resolved (Experiments A and B both confirmed)
 
 ---
 
@@ -1084,6 +1119,8 @@ Settings.json: add pip_audit_guard to PreToolUse Bash.
 
 ### Step 8 — Strategy C: scan_prompt_injection.py + guard hook (conditional)
 
+**SKIPPED** (2026-06-21): AC-PRB-04 confirmed hookSpecificOutput.additionalContext works — `scan_prompt_injection.py` needs no redesign. See Step 2 Confirmed Strategies for full rationale. One action item: verify `scan_prompt_injection.py` includes `hookEventName` in its hookSpecificOutput JSON (required field discovered during P12 probe).
+
 **Goal**: If Phase 1 probes show hookSpecificOutput doesn't work (AC-PRB-04 fails), add state-file gating to scan_prompt_injection.py.
 
 **Skip condition**: If AC-PRB-04 confirms hookSpecificOutput works, scan_prompt_injection.py needs no redesign. Mark this step as skipped and document why.
@@ -1412,22 +1449,23 @@ Remove `check_test_pair.py` from settings.json PostToolUse Write matcher hooks a
 
 ## Exit Checklist
 
-- [ ] Phase 1 probes completed and results documented
-- [ ] Step 0c Experiments A/B resolved (hook execution order + side-effect visibility)
-- [ ] All strategy assignments confirmed (or fallbacks activated)
-- [ ] `check_dependency_pins.py` blocks via PreToolUse (or fallback)
-- [ ] `block_suppressions.py` blocks via PreToolUse (or fallback)
-- [ ] `block_glob_deny_rules.py` blocks via PreToolUse with file reconstruction (or fallback)
-- [ ] `check_docstrings.py` injects findings as `# HOOK:DOCSTRING:` comments
-- [ ] `check_random_seeds.py` injects findings as `# HOOK:SEED:` comments
-- [ ] `pyright_check.sh` injects findings as `# HOOK:PYRIGHT:` comments at error lines
-- [ ] `bandit_check.sh` injects findings as `# HOOK:BANDIT:` comments at finding lines
-- [ ] `pip_audit_check.py` writes state file; `pip_audit_guard.py` blocks next install
-- [ ] `scan_prompt_injection.py` uses working channel (hookSpecificOutput OR state-file gating)
-- [ ] `block_read_env.py` blocks both Read(.env) and Bash(cat .env)
-- [ ] `check_test_pair.py` unwired from settings.json
+- [x] Phase 1 probes completed and results documented (Step 1 — 2026-06-21)
+- [x] Step 0c Experiments A/B resolved (Step 2 — 2026-06-21: sequential execution confirmed, hooks see modified files)
+- [x] All strategy assignments confirmed (Step 2 — 2026-06-21: all probes passed, no fallbacks needed)
+- [ ] `check_dependency_pins.py` blocks via PreToolUse (Strategy A — Step 4)
+- [ ] `block_suppressions.py` blocks via PreToolUse (Strategy A — Step 4)
+- [ ] `block_glob_deny_rules.py` blocks via PreToolUse with file reconstruction (Strategy A — Step 4)
+- [ ] `check_docstrings.py` injects findings as `# HOOK:DOCSTRING:` comments (Strategy B — Step 5)
+- [ ] `check_random_seeds.py` injects findings as `# HOOK:SEED:` comments (Strategy B — Step 5)
+- [ ] `pyright_check.sh` injects findings as `# HOOK:PYRIGHT:` comments at error lines (Strategy B — Step 6)
+- [ ] `bandit_check.sh` injects findings as `# HOOK:BANDIT:` comments at finding lines (Strategy B — Step 6)
+- [ ] `pip_audit_check.py` writes state file; `pip_audit_guard.py` blocks next install (Strategy C — Step 7)
+- [x] `scan_prompt_injection.py` uses working channel — hookSpecificOutput confirmed by P12 (Step 8 SKIPPED)
+- [ ] `block_read_env.py` blocks both Read(.env) and Bash(cat .env) (Strategy D — Step 9)
+- [ ] `check_test_pair.py` unwired from settings.json (Step 10)
 - [ ] `test_hook_wiring.py` CANONICAL_HOOKS updated for all wiring changes
 - [ ] `~/.claude/settings.json` reflects all wiring changes
 - [ ] `.hook_state/` directory gitignored
 - [ ] `pytest tests/` full suite passes
 - [ ] Each redesigned hook verified manually in a Claude Code session
+- [ ] Verify `scan_prompt_injection.py` includes `hookEventName` in hookSpecificOutput (P12 discovery)

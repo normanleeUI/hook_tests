@@ -451,17 +451,6 @@ def ensure_state_dir(path: Path) -> Path:
     return path
 ```
 
-```python
-# tests/test_hooks/conftest.py — add sys.path fixture for hook_inject imports
-import sys, os
-
-@pytest.fixture(autouse=True)
-def hooks_on_path():
-    hooks_dir = os.path.expanduser("~/.claude/hooks")
-    if hooks_dir not in sys.path:
-        sys.path.insert(0, hooks_dir)
-```
-
 ```
 # .gitignore addition
 .hook_state/
@@ -482,7 +471,6 @@ def hooks_on_path():
 #### Files
 - New: `~/.claude/hooks/hook_inject.py`
 - New: `tests/test_hooks/test_hook_inject.py`
-- Update: `tests/test_hooks/conftest.py` (add sys.path fixture)
 - Update: `.gitignore`
 
 ---
@@ -1468,4 +1456,4 @@ Remove `check_test_pair.py` from settings.json PostToolUse Write matcher hooks a
 - [ ] `.hook_state/` directory gitignored
 - [ ] `pytest tests/` full suite passes
 - [ ] Each redesigned hook verified manually in a Claude Code session
-- [ ] Verify `scan_prompt_injection.py` includes `hookEventName` in hookSpecificOutput (P12 discovery)
+- [x] Verify `scan_prompt_injection.py` includes `hookEventName` in hookSpecificOutput (P12 discovery — confirmed line 312, hardcodes "PostToolUse")

@@ -270,6 +270,8 @@ Update this plan document with confirmed strategies before proceeding to Phase 2
 
 ## Phase 2: Implementation
 
+> **Prompt template note**: Steps 1–2 use a custom prompt (`prompts/channel_redesign_step_1.md`). Starting from Step 3, switch to the standard template (`../dev_philosophy_review/TEMPLATE_step_prompt.md`). A stub at `prompts/channel_redesign_step_3.md` has setup instructions.
+
 ### Step 3 — Infrastructure: injection helper + .hook_state/ + test support
 
 **Goal**: Create shared infrastructure used by Steps 4-9.

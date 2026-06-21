@@ -27,3 +27,4 @@ prompts/
 .mcp.json
 .idea
 .vscode
+.hook_state/

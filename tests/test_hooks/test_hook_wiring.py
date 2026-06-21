@@ -160,6 +160,11 @@ DEPRECATED_HOOKS: dict[str, str] = {
     "plan_runner_write_gate.py": "Never wired: plan runner concept abandoned",
 }
 
+KNOWN_LIBRARIES: set[str] = {
+    "hook_log.py",
+    "hook_inject.py",
+}
+
 
 def load_settings() -> dict:
     """Load and parse ~/.claude/settings.json."""
@@ -261,7 +266,7 @@ class TestOrphanDetection:
 
     def test_no_unknown_scripts_on_disk(self):
         """Every script in ~/.claude/hooks/ is canonical or deprecated."""
-        known = set(CANONICAL_HOOKS) | set(DEPRECATED_HOOKS)
+        known = set(CANONICAL_HOOKS) | set(DEPRECATED_HOOKS) | KNOWN_LIBRARIES
         on_disk = {
             f.name
             for f in HOOKS_DIR.iterdir()

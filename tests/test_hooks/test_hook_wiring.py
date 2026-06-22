@@ -74,6 +74,12 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Bash",
         "if_condition": "Bash(git add*)",
     },
+    "pip_audit_guard.py": {
+        "event": "PreToolUse",
+        "interpreter": "python3",
+        "matcher": "Bash",
+        "if_condition": "Bash(*uv add*)|Bash(*uv sync*)|Bash(*uv pip install*)",
+    },
     # PreToolUse -- Edit|Write group (blocking hooks)
     "block_glob_deny_rules.py": {
         "event": "PreToolUse",
@@ -200,6 +206,7 @@ class TestScriptExistence:
     def test_all_wired_scripts_exist(self):
         settings = load_settings()
         for entry in extract_wired_scripts(settings):
+# HOOK:PYRIGHT: "split" is not a known attribute of "None" (reportOptionalMemberAccess)
             script_path = Path(entry["command"].split()[-1])
             assert script_path.exists(), (
                 f"Wired script missing: {script_path} "
@@ -209,6 +216,7 @@ class TestScriptExistence:
     def test_all_wired_scripts_readable(self):
         settings = load_settings()
         for entry in extract_wired_scripts(settings):
+# HOOK:PYRIGHT: "split" is not a known attribute of "None" (reportOptionalMemberAccess)
             script_path = Path(entry["command"].split()[-1])
             assert os.access(script_path, os.R_OK), f"Not readable: {script_path}"
 

@@ -5,7 +5,9 @@ dependency-changing commands (``uv add``, ``uv sync``, ``uv pip install``)
 succeed (exitCode == 0), and silently exits for non-matching commands or
 failed commands (exitCode != 0).
 
-Exit codes: 0 = no action or audit clean, 2 = vulnerabilities found (spec-correct; see known bugs).
+Exit codes: always 0 on PostToolUse (exit codes are cosmetic). When vulns
+are found, findings are persisted to ``.hook_state/pip_audit/report.json``
+so the companion guard hook (``pip_audit_guard.py``) can block future ops.
 
 The hook has two sequential gates:
   1. Command substring check -- must contain ``uv add``, ``uv sync``, or
@@ -15,8 +17,10 @@ The hook has two sequential gates:
 Only when both gates pass does the hook engage and run ``uvx pip-audit``.
 """
 
+import json as json_mod
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -211,22 +215,6 @@ class TestPipAuditCheckKnownBugs:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="hook bug: hook uses exit(1) for vuln found, should be exit(2) for deliberate block",
-    )
-    @pytest.mark.network
-    def test_vuln_found_should_exit_2(self):
-        """Step 0d: exit 1 = hook error, not deliberate block. Should be exit 2."""
-        payload = {
-            "tool_input": {"command": "uv add requests"},
-            "tool_result": {"exitCode": 0},
-        }
-        code, stderr, _ = run_hook(HOOK, payload, timeout=30)
-        if "[pip-audit]" not in stderr or "vulnerability" not in stderr.lower():
-            pytest.skip("No vulnerabilities found in current environment")
-        assert code == 2, "Vuln found should exit 2 (block), not 1 (error)"
-
-    @pytest.mark.xfail(
-        strict=True,
         reason="hook bug: unhandled exception on malformed input",
     )
     def test_non_dict_json_should_not_crash(self):
@@ -309,8 +297,12 @@ class TestPipAuditCheckSubprocessResults:
         assert code == 0
         assert "[pip-audit]" in stderr
 
-    def test_audit_vuln_found_returns_nonzero(self, post_tool_payload, tmp_path):
-        """When pip-audit exits 1 (vulns found), hook should return nonzero."""
+    def test_audit_vuln_found_exits_zero_and_reports(self, post_tool_payload, tmp_path):
+        """When pip-audit finds vulns, hook exits 0 (PostToolUse is cosmetic) but reports to stderr.
+
+        Blocking is handled by the companion guard hook (pip_audit_guard.py)
+        via the state file, not by exit code on PostToolUse.
+        """
         fake_bin = self._make_fake_uvx(
             tmp_path,
             1,
@@ -325,5 +317,110 @@ class TestPipAuditCheckSubprocessResults:
             env={"PATH": f"{fake_bin}:{real_path}"},
             timeout=15,
         )
-        assert code != 0, "Hook should return nonzero when pip-audit finds vulns"
+        assert code == 0, (
+            "PostToolUse hook should always exit 0 (guard handles blocking)"
+        )
         assert "[pip-audit]" in stderr
+
+
+class TestPipAuditCheckStateFile:
+    """State-file gating: pip_audit_check.py writes/clears .hook_state/pip_audit/report.json.
+
+    When pip-audit finds vulnerabilities, the hook persists findings to a state
+    file so the companion guard hook (pip_audit_guard.py) can block future
+    dependency operations. When the audit is clean, any existing state file is
+    deleted so the guard stops blocking.
+    """
+
+    @staticmethod
+    def _make_fake_uvx(tmp_path, exit_code: int, stdout: str = "", stderr: str = ""):
+        """Create a fake 'uvx' script that returns the given exit code."""
+        fake_bin = tmp_path / "fake_bin"
+        fake_bin.mkdir(exist_ok=True)
+        fake_uvx = fake_bin / "uvx"
+        fake_uvx.write_text(
+            f"#!/bin/sh\necho '{stdout}'\necho '{stderr}' >&2\nexit {exit_code}\n"
+        )
+        fake_uvx.chmod(0o755)
+        return str(fake_bin)
+
+    def _run_with_state_dir(
+        self,
+        post_tool_payload,
+        tmp_path,
+        exit_code,
+        stdout="",
+        stderr_text="",
+        command="uv add requests",
+    ):
+        """Run the hook with a fake uvx and HOOK_STATE_DIR set."""
+        fake_bin = self._make_fake_uvx(tmp_path, exit_code, stdout, stderr_text)
+        real_path = os.environ.get("PATH", "")
+        state_dir = str(tmp_path / ".hook_state")
+        payload = post_tool_payload(command)
+        code, stderr, _ = run_hook(
+            HOOK,
+            payload,
+            env={
+                "PATH": f"{fake_bin}:{real_path}",
+                "HOOK_STATE_DIR": state_dir,
+            },
+            timeout=15,
+        )
+        return code, stderr, Path(state_dir)
+
+    def test_vuln_found_creates_state_file(self, post_tool_payload, tmp_path):
+        """When pip-audit finds vulns (fake uvx exits 1), state file is created."""
+        _, _, state_dir = self._run_with_state_dir(
+            post_tool_payload,
+            tmp_path,
+            exit_code=1,
+            stdout="pkg1  1.0  CVE-2024-1234",
+            stderr_text="VULNERABILITIES FOUND",
+        )
+        report = state_dir / "pip_audit" / "report.json"
+        assert report.exists(), "State file should be created when vulns found"
+
+    def test_clean_audit_clears_state_file(self, post_tool_payload, tmp_path):
+        """When pip-audit is clean (fake uvx exits 0), existing state file is deleted."""
+        state_dir = tmp_path / ".hook_state"
+        report = state_dir / "pip_audit" / "report.json"
+        report.parent.mkdir(parents=True)
+        report.write_text('{"vulns": "old data", "summary": "stale"}')
+
+        _, _, state_dir_result = self._run_with_state_dir(
+            post_tool_payload,
+            tmp_path,
+            exit_code=0,
+            stdout="pkg1\npkg2\npkg3",
+        )
+        report = state_dir_result / "pip_audit" / "report.json"
+        assert not report.exists(), "State file should be deleted when audit is clean"
+
+    def test_clean_audit_no_state_file_is_noop(self, post_tool_payload, tmp_path):
+        """When pip-audit is clean and no state file exists, nothing crashes."""
+        code, _, state_dir = self._run_with_state_dir(
+            post_tool_payload,
+            tmp_path,
+            exit_code=0,
+            stdout="pkg1\npkg2",
+        )
+        report = state_dir / "pip_audit" / "report.json"
+        assert not report.exists()
+        assert code == 0
+
+    def test_state_file_contains_summary(self, post_tool_payload, tmp_path):
+        """The state file content includes vulnerability details from pip-audit."""
+        vuln_output = "pkg1  1.0  CVE-2024-1234"
+        _, _, state_dir = self._run_with_state_dir(
+            post_tool_payload,
+            tmp_path,
+            exit_code=1,
+            stdout=vuln_output,
+            stderr_text="Found 1 vulnerability",
+        )
+        report = state_dir / "pip_audit" / "report.json"
+        data = json_mod.loads(report.read_text())
+        assert "vulns" in data, "State file must have 'vulns' key"
+        assert "summary" in data, "State file must have 'summary' key"
+        assert "CVE-2024-1234" in data["vulns"], "Vuln details should be in state file"

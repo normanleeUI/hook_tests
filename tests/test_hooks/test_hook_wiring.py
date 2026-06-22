@@ -163,6 +163,7 @@ DEPRECATED_HOOKS: dict[str, str] = {
 KNOWN_LIBRARIES: set[str] = {
     "hook_log.py",
     "hook_inject.py",
+    "inject_tool_findings.py",
 }
 
 

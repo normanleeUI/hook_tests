@@ -1,9 +1,13 @@
-"""Gate-logic tests for 6 shell-based hooks.
+"""Gate-logic tests for 6 shell-based hooks, plus injection tests for pyright/bandit.
 
 These hooks are thin wrappers that parse JSON, extract file paths, filter by
 extension/location, and delegate to external tools (ruff, pyright, bandit).
 We verify the GATE logic — does the hook correctly decide whether to invoke
 the tool? — not the external tool's behavior.
+
+The injection tests (Step 6) verify the full pipeline: shell script delegates
+to inject_tool_findings.py, which runs the real tool and injects # HOOK:PYRIGHT:
+or # HOOK:BANDIT: comments into the file.
 
 Approach: create fake tool stubs that log invocations, inject them into PATH,
 run the hook, then check the log to see whether/how the tool was called.
@@ -11,6 +15,7 @@ run the hook, then check the log to see whether/how the tool was called.
 
 from __future__ import annotations
 
+import ast
 import os
 import stat
 import subprocess
@@ -155,7 +160,6 @@ class TestPyrightCheck:
 
         log = _read_log(log_file)
         assert "uvx pyright" in log
-        assert str(py_file) in log
 
     def test_skips_claude_dir(self, fake_tool_env, tmp_path):
         """Files under any .claude/ directory should be skipped."""
@@ -216,7 +220,6 @@ class TestBanditCheck:
 
             log = _read_log(log_file)
             assert "uvx bandit" in log
-            assert py_file in log
 
     def test_skips_test_files(self, fake_tool_env, tmp_path):
         """Test files (test_* prefix, tests/ dir, _test.py suffix) should be skipped."""
@@ -492,3 +495,141 @@ class TestRuffFormatProperties:
             # Clear log for next example
             if log_file.exists():
                 log_file.write_text("")
+
+
+# ── Injection tests (Step 6) ──────────────────────────────────────────────
+
+
+class TestPyrightInjection:
+    """Run the real pyright tool and verify # HOOK:PYRIGHT: comments are injected."""
+
+    def test_injects_before_error_line(self, tmp_path):
+        """AC-INJ-06: comment appears immediately before the line with the error."""
+        src = tmp_path / "typed.py"
+        src.write_text(
+            'def add(x: int, y: int) -> int:\n    return x + y\n\nadd("a", "b")\n'
+        )
+        payload = {
+            "tool_input": {"file_path": str(src)},
+            "tool_response": {"filePath": str(src)},
+        }
+        run_bash_hook("pyright_check.sh", payload, timeout=30)
+        lines = src.read_text().splitlines()
+        error_line_idx = next(
+            i for i, line in enumerate(lines) if 'add("a", "b")' in line
+        )
+        assert error_line_idx > 0, "Error line should not be the first line"
+        assert "# HOOK:PYRIGHT:" in lines[error_line_idx - 1]
+
+    def test_no_injection_when_clean(self, tmp_path):
+        src = tmp_path / "clean.py"
+        original = "def add(x: int, y: int) -> int:\n    return x + y\n\nadd(1, 2)\n"
+        src.write_text(original)
+        payload = {
+            "tool_input": {"file_path": str(src)},
+            "tool_response": {"filePath": str(src)},
+        }
+        run_bash_hook("pyright_check.sh", payload, timeout=30)
+        assert src.read_text() == original
+
+    def test_skip_non_python(self, tmp_path):
+        src = tmp_path / "readme.txt"
+        src.write_text("not python")
+        payload = {
+            "tool_input": {"file_path": str(src)},
+            "tool_response": {"filePath": str(src)},
+        }
+        run_bash_hook("pyright_check.sh", payload)
+        assert "HOOK:" not in src.read_text()
+
+    def test_multiple_findings_injected_at_correct_lines(self, tmp_path):
+        """Multiple errors on different lines each get a comment at the right position."""
+        src = tmp_path / "multi.py"
+        src.write_text(
+            "def add(x: int, y: int) -> int:\n"
+            "    return x + y\n"
+            "\n"
+            "def greet(name: str) -> str:\n"
+            '    return "Hello, " + name\n'
+            "\n"
+            'result1: int = add("a", "b")\n'
+            "result2: str = greet(42)\n"
+            'result3: int = "not an int"\n'
+        )
+        payload = {
+            "tool_input": {"file_path": str(src)},
+            "tool_response": {"filePath": str(src)},
+        }
+        run_bash_hook("pyright_check.sh", payload, timeout=30)
+        content = src.read_text()
+        lines = content.splitlines()
+
+        hook_lines = [i for i, line in enumerate(lines) if "# HOOK:PYRIGHT:" in line]
+        assert len(hook_lines) >= 3, (
+            f"Expected >=3 injected comments, got {len(hook_lines)}"
+        )
+
+        # Each original code line should still be present and follow its comment
+        for code_fragment in ['add("a", "b")', "greet(42)", '"not an int"']:
+            code_idx = next(i for i, line in enumerate(lines) if code_fragment in line)
+            assert "# HOOK:PYRIGHT:" in lines[code_idx - 1], (
+                f"No HOOK comment before line containing {code_fragment!r}"
+            )
+
+        ast.parse(content)
+
+    def test_stale_comments_replaced(self, tmp_path):
+        """Stale HOOK:PYRIGHT: comments are cleaned before new injection."""
+        src = tmp_path / "typed.py"
+        src.write_text(
+            "# HOOK:PYRIGHT: old stale finding\n"
+            "def add(x: int, y: int) -> int:\n"
+            "    return x + y\n"
+            "\n"
+            'add("a", "b")\n'
+        )
+        payload = {
+            "tool_input": {"file_path": str(src)},
+            "tool_response": {"filePath": str(src)},
+        }
+        run_bash_hook("pyright_check.sh", payload, timeout=30)
+        content = src.read_text()
+        assert "old stale finding" not in content
+        assert "# HOOK:PYRIGHT:" in content
+
+
+class TestBanditInjection:
+    """Run the real bandit tool and verify # HOOK:BANDIT: comments are injected."""
+
+    def test_injects_for_security_issue(self):
+        # eval() triggers a medium-severity finding (B307). bandit_check.sh
+        # uses -ll which means medium+, so low-severity findings are filtered.
+        # Use a non-test-named temp dir so bandit_check.sh doesn't skip it.
+        with tempfile.TemporaryDirectory(prefix="proj_") as td:
+            src = os.path.join(td, "vuln.py")
+            with open(src, "w") as fh:
+                fh.write('user_input = "print(1)"\nresult = eval(user_input)\n')
+            payload = {
+                "tool_input": {"file_path": src},
+                "tool_response": {"filePath": src},
+            }
+            run_bash_hook("bandit_check.sh", payload, timeout=30)
+            with open(src) as fh:
+                content = fh.read()
+            assert "# HOOK:BANDIT:" in content
+            ast.parse(content)  # AC-INJ-05: injected comments are valid Python
+
+    def test_no_injection_when_clean(self):
+        with tempfile.TemporaryDirectory(prefix="proj_") as td:
+            src = os.path.join(td, "clean.py")
+            original = "x = 1\n"
+            with open(src, "w") as fh:
+                fh.write(original)
+            payload = {
+                "tool_input": {"file_path": src},
+                "tool_response": {"filePath": src},
+            }
+            run_bash_hook("bandit_check.sh", payload, timeout=30)
+            with open(src) as fh:
+                content = fh.read()
+            assert content == original

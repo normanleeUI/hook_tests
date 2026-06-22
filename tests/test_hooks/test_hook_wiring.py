@@ -1,4 +1,4 @@
-"""Automated config validation: verify all 19 hooks are correctly wired.
+"""Automated config validation: verify all 18 hooks are correctly wired.
 
 Parses ~/.claude/settings.json and checks that every canonical hook is
 present with the correct event type, matcher, and if-condition. Also
@@ -130,13 +130,6 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Edit|Write",
         "if_condition": None,
     },
-    # PostToolUse -- Write group
-    "check_test_pair.py": {
-        "event": "PostToolUse",
-        "interpreter": "python3",
-        "matcher": "Write",
-        "if_condition": None,
-    },
     # PostToolUse -- Bash group
     "pip_audit_check.py": {
         "event": "PostToolUse",
@@ -165,6 +158,7 @@ DEPRECATED_HOOKS: dict[str, str] = {
     "log_new_dependency.py": "Unwired 2026-06-13: redundant with pip_audit_check",
     "r_style_check.sh": "Unwired 2026-06-13: R not actively used",
     "plan_runner_write_gate.py": "Never wired: plan runner concept abandoned",
+    "check_test_pair.py": "Unwired 2026-06-21: obsolete, uses dead stdout channel",
 }
 
 KNOWN_LIBRARIES: set[str] = {

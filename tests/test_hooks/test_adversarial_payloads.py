@@ -5,8 +5,8 @@ payloads -- never exit 1 (unhandled exception). Also checks that no
 hook emits a Python traceback on stderr for any input.
 
 Three test classes:
-- TestNoCrashOnAdversarialInput: 19 hooks x 18 payloads via run_hook
-- TestNoCrashOnInvalidJson: 19 hooks x 6 raw inputs via subprocess
+- TestNoCrashOnAdversarialInput: 18 hooks x 18 payloads via run_hook
+- TestNoCrashOnInvalidJson: 18 hooks x 6 raw inputs via subprocess
 - TestNoCrashOnHypothesisPayloads: 5 high-value hooks x hypothesis JSON
 
 Known issue: many Python hooks lack try/except around json.loads() and
@@ -67,7 +67,6 @@ _CRASH_ON_NON_DICT = {
     "check_dependency_pins.py",
     "check_docstrings.py",
     "check_random_seeds.py",
-    "check_test_pair.py",
     "pip_audit_check.py",
     "scan_prompt_injection.py",
 }
@@ -82,7 +81,6 @@ _CRASH_ON_NONE_TOOL_INPUT = {
     "block_glob_deny_rules.py",
     "check_docstrings.py",
     "check_random_seeds.py",
-    "check_test_pair.py",
 }
 
 # Hooks that crash on {"tool_input": {"command": None}} or {"file_path": None}.
@@ -103,7 +101,6 @@ _CRASH_ON_JSON_ERROR = {
     "block_glob_deny_rules.py",
     "check_docstrings.py",
     "check_random_seeds.py",
-    "check_test_pair.py",
     "scan_prompt_injection.py",
 }
 

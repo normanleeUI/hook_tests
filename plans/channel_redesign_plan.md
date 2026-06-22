@@ -1368,6 +1368,7 @@ Remove `check_test_pair.py` from settings.json PostToolUse Write matcher hooks a
 - `pytest tests/` — full suite passes
 - Manual: write a new .py file in Claude Code → no "Checking for test file..." status message
 - `grep -r "check_test_pair" ~/.claude/settings.json` returns nothing
+- **Cross-cutting test audit**: verify that `test_adversarial_payloads.py` `_CRASH_ON_*` sets, `test_performance.py` expected exit codes, and `test_intent_gaps.py` assertions all still reflect the redesigned hooks. Check for vacuous tests (tests that pass trivially because they assert on a channel the hook no longer uses).
 
 #### Files
 - Update: `~/.claude/settings.json`
@@ -1457,3 +1458,22 @@ Remove `check_test_pair.py` from settings.json PostToolUse Write matcher hooks a
 - [ ] `pytest tests/` full suite passes
 - [ ] Each redesigned hook verified manually in a Claude Code session
 - [x] Verify `scan_prompt_injection.py` includes `hookEventName` in hookSpecificOutput (P12 discovery — confirmed line 312, hardcodes "PostToolUse")
+
+---
+
+## Addendum A: Pyright Venv Discovery (Fix Required)
+
+**Problem**: `inject_tool_findings.py` runs `uvx pyright` on a temp file in `/tmp/`. Because the file is outside the project directory, pyright cannot resolve third-party imports (no venv, no `pyrightconfig.json`). This causes false-positive `reportMissingImports` findings injected as `# HOOK:PYRIGHT:` artifacts into every project file that imports non-stdlib packages. Even running pyright in-project fails without explicit `[tool.pyright]` config pointing to the venv — this is a fundamental gap with global hooks that invoke tools needing per-project context.
+
+**Stopgap (2026-06-21)**: `_parse_pyright` in `inject_tool_findings.py` filters out `reportMissingImports` findings. Real type errors (`reportArgumentType`, `reportAssignmentType`, etc.) are still injected. This filter must be reverted once venv discovery is implemented.
+
+**Fix options** (implement one, then revert the stopgap filter):
+1. **Auto-discover venv**: walk up from the original file looking for `.venv/`, pass `--pythonpath .venv/bin/python` to pyright
+2. **Only run if pyright configured**: skip injection unless the project has `pyrightconfig.json` or `[tool.pyright]` in `pyproject.toml` (mirrors the existing mypy-skip logic, but inverted)
+3. **Create temp file in project dir**: `tempfile.mkstemp(suffix=".py", dir=path.parent)` so pyright inherits project config discovery — only works if option 1 or 2 also provides venv path
+
+**Scope**: only pyright is affected among current hooks. Bandit does AST-level pattern matching and doesn't need import resolution. Ruff runs on the original file path (no temp file). A future semgrep hook would also be unaffected (pattern matching, not import resolution).
+
+## Addendum B: Global Semgrep Hook (Future Work)
+
+Create a global Semgrep hook in `~/.claude/settings.json` (analogous to the existing `bandit_check.sh` hook) using the `/hook` skill. This would run Semgrep automatically on PostToolUse Edit/Write for `.py` files, complementing Bandit's Python-specific security checks with Semgrep's broader pattern-matching capabilities. Currently, Semgrep is only available as an on-demand MCP server in `example-lib` — a global hook would provide consistent coverage across all projects.

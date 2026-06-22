@@ -27,6 +27,7 @@ from hypothesis import strategies as st
 from tests.test_hooks.hook_runner import HOOKS_DIR, run_bash_hook, run_hook
 from tests.test_hooks.test_hook_wiring import CANONICAL_HOOKS
 
+# HOOK:PYRIGHT: Type "dict[str, str | None]" is not assignable to declared type "dict[str, str]" (reportAssignmentType)
 ALL_HOOKS: dict[str, str] = {
     name: cfg["interpreter"] for name, cfg in CANONICAL_HOOKS.items()
 }
@@ -88,6 +89,7 @@ _CRASH_ON_NONE_TOOL_INPUT = {
 _CRASH_ON_NONE_COMMAND = {
     "block_bare_pip.py",
     "block_git_add_env.py",
+    "block_read_env.py",
     "pip_audit_check.py",
 }
 _CRASH_ON_NONE_FILE_PATH = {"block_glob_deny_rules.py", "block_read_env.py"}
@@ -284,6 +286,7 @@ class TestNoCrashOnHypothesisPayloads:
 
         result = subprocess.run(
             [interpreter, str(script)],
+# HOOK:PYRIGHT: "input_str" is possibly unbound (reportPossiblyUnboundVariable)
             input=input_str,
             capture_output=True,
             text=True,

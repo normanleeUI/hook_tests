@@ -2,9 +2,12 @@
 
 Verifies that the hook blocks reading .env files (exit 2), allows template
 files like .env.example (exit 0), and allows non-env files (exit 0).
-Uses both explicit examples and hypothesis property tests to cover the
-decision space.
+Covers both Read-path (file_path payload) and Bash-path (command payload)
+routing. Uses both explicit examples and hypothesis property tests to
+cover the decision space.
 """
+
+import pytest
 
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
@@ -121,3 +124,60 @@ class TestBlockReadEnvEdgeCases:
         """Fail-safe: missing file_path key should exit 0."""
         code, _, _ = run_hook(HOOK, {"tool_input": {}})
         assert code == 0
+
+
+class TestBlockReadEnvBashMatcher:
+    """Tests for the Bash-path: commands referencing .env files are blocked."""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "cat .env",
+            "cat .env.local",
+            "cat .env.production",
+            "cat path/to/.env",
+            "head .env",
+            "head -5 .env",
+            "tail .env",
+            "less .env",
+            "grep API_KEY .env",
+            "grep -r SECRET .env.local",
+            "base64 .env",
+            "source .env",
+            ". .env",
+            "python3 -c 'open(\".env\").read()'",
+            "xargs cat < .env",
+            "$(cat .env)",
+        ],
+    )
+    def test_bash_blocks_env_file_read_commands(self, bash_payload, cmd):
+        code, stderr, _ = run_hook(HOOK, bash_payload(cmd))
+        assert code == 2, f"Should block: {cmd}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "cat README.md",
+            "cat .env.example",
+            "cat .env.template",
+            "cat .env.sample",
+            "cat .env.dist",
+            "head pyproject.toml",
+            "grep pattern src/main.py",
+            "echo hello world",
+            "ls -la",
+            "pip install python-dotenv",
+        ],
+    )
+    def test_bash_allows_non_env_commands(self, bash_payload, cmd):
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
+        assert code == 0, f"Should allow: {cmd}"
+
+    def test_bash_blocks_compound_command_with_env_read(self, bash_payload):
+        code, _, _ = run_hook(HOOK, bash_payload("echo hello && cat .env"))
+        assert code == 2
+
+    def test_read_tool_still_blocks(self, read_payload):
+        """Regression: existing Read matcher behavior preserved."""
+        code, _, _ = run_hook(HOOK, read_payload(".env"))
+        assert code == 2

@@ -53,7 +53,8 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
     "block_read_env.py": {
         "event": "PreToolUse",
         "interpreter": "python3",
-        "matcher": "Read",
+# HOOK:PYRIGHT: Type "dict[str, dict[str, str | None] | dict[str, str | list[str] | None]]" is not assignable to declared type "dict[str, dict[str, str | None]]"
+        "matcher": ["Read", "Bash"],
         "if_condition": None,
     },
     "block_bare_pip.py": {
@@ -242,9 +243,16 @@ class TestCanonicalList:
             assert entry["event"] == expected["event"], (
                 f"{name}: event {entry['event']} != expected {expected['event']}"
             )
-            assert entry["matcher"] == expected["matcher"], (
-                f"{name}: matcher {entry['matcher']} != expected {expected['matcher']}"
-            )
+            expected_matcher = expected["matcher"]
+            if isinstance(expected_matcher, list):
+# HOOK:PYRIGHT: Operator "in" not supported for types "str | None" and "<subclass of str and list>"
+                assert entry["matcher"] in expected_matcher, (
+                    f"{name}: matcher {entry['matcher']} not in expected {expected_matcher}"
+                )
+            else:
+                assert entry["matcher"] == expected_matcher, (
+                    f"{name}: matcher {entry['matcher']} != expected {expected_matcher}"
+                )
             assert entry["if_condition"] == expected["if_condition"], (
                 f"{name}: if {entry['if_condition']} != expected {expected['if_condition']}"
             )

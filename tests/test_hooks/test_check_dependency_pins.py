@@ -531,3 +531,30 @@ class TestDependencyPinsPyprojectParserEdgeCases:
             ),
         )
         assert code == 0
+
+
+class TestDependencyPinsPreToolUse:
+    """PreToolUse payloads have no tool_response key — verify hook works without it."""
+
+    def test_blocks_unpinned_without_tool_response(self):
+        """PreToolUse payload with no tool_response still blocks unpinned deps."""
+        payload = {
+            "tool_input": {
+                "file_path": "pyproject.toml",
+                "old_string": "",
+                "new_string": 'dependencies = [\n    "requests",\n]',
+            }
+        }
+        code, stderr, _ = run_hook(HOOK, payload)
+        assert code == 2
+
+    def test_allows_pinned_via_write_content(self):
+        """PreToolUse Write payload uses content field (no tool_response)."""
+        payload = {
+            "tool_input": {
+                "file_path": "pyproject.toml",
+                "content": 'dependencies = [\n    "requests==2.32.3",\n]',
+            }
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0

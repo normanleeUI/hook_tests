@@ -401,3 +401,31 @@ class TestBlockSuppressionsEarlyExitGuards:
         """Empty new_string on a .py file should return 0, not block."""
         code, _, _ = run_hook(HOOK, edit_payload("/project/src/foo.py", ""))
         assert code == 0
+
+
+class TestBlockSuppressionsPreToolUse:
+    """PreToolUse payloads have no tool_response — verify hook works without it."""
+
+    def test_blocks_bare_type_ignore_without_tool_response(self):
+        """PreToolUse payload blocks unjustified type: ignore."""
+        # Build suppression dynamically to avoid triggering the hook on this file
+        ti = "# type" + ": ignore"
+        payload = {
+            "tool_input": {
+                "file_path": "module.py",
+                "new_string": f"x = 1  {ti}\n",
+            }
+        }
+        code, stderr, _ = run_hook(HOOK, payload)
+        assert code == 2
+
+    def test_allows_clean_code_without_tool_response(self):
+        """PreToolUse payload allows clean code."""
+        payload = {
+            "tool_input": {
+                "file_path": "module.py",
+                "new_string": "x = 1\n",
+            }
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0

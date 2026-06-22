@@ -74,9 +74,9 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Bash",
         "if_condition": "Bash(git add*)",
     },
-    # PostToolUse -- Edit|Write group
+    # PreToolUse -- Edit|Write group (blocking hooks)
     "block_glob_deny_rules.py": {
-        "event": "PostToolUse",
+        "event": "PreToolUse",
         "interpreter": "python3",
         "matcher": "Edit|Write",
         "if_condition": None,
@@ -100,7 +100,7 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "if_condition": None,
     },
     "check_dependency_pins.py": {
-        "event": "PostToolUse",
+        "event": "PreToolUse",
         "interpreter": "python3",
         "matcher": "Edit|Write",
         "if_condition": None,
@@ -112,7 +112,7 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "if_condition": None,
     },
     "block_suppressions.py": {
-        "event": "PostToolUse",
+        "event": "PreToolUse",
         "interpreter": "python3",
         "matcher": "Edit|Write",
         "if_condition": None,

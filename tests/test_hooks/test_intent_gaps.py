@@ -375,8 +375,14 @@ class TestBlockGlobDenyRulesIntentGaps:
     def test_double_star_with_whitespace_in_deny(self, tmp_path, ws):
         """Whitespace around ** in deny rules should still block."""
         rule = f"Read({ws}**{ws}/.env)"
-        settings_file = _write_settings(tmp_path, {"permissions": {"deny": [rule]}})
-        payload = {"tool_input": {"file_path": str(settings_file)}}
+        content = {"permissions": {"deny": [rule]}}
+        settings_file = _write_settings(tmp_path, content)
+        payload = {
+            "tool_input": {
+                "file_path": str(settings_file),
+                "content": json.dumps(content),
+            }
+        }
         code, _, _ = run_hook(self.HOOK, payload)
         assert code == 2, f"deny rule {rule!r} was not blocked"
 
@@ -390,16 +396,25 @@ class TestBlockGlobDenyRulesIntentGaps:
         """** in sandbox filesystem sections should block."""
         settings_content = {"sandbox": {"filesystem": {section: ["**/.env"]}}}
         settings_file = _write_settings(tmp_path, settings_content)
-        payload = {"tool_input": {"file_path": str(settings_file)}}
+        payload = {
+            "tool_input": {
+                "file_path": str(settings_file),
+                "content": json.dumps(settings_content),
+            }
+        }
         code, _, _ = run_hook(self.HOOK, payload)
         assert code == 2, f"** in sandbox.filesystem.{section} was not blocked"
 
     def test_nested_double_star_pattern(self, tmp_path):
         """Nested ** pattern (e.g., src/**/.env) should block."""
-        settings_file = _write_settings(
-            tmp_path, {"permissions": {"deny": ["Read(src/**/.env)"]}}
-        )
-        payload = {"tool_input": {"file_path": str(settings_file)}}
+        content = {"permissions": {"deny": ["Read(src/**/.env)"]}}
+        settings_file = _write_settings(tmp_path, content)
+        payload = {
+            "tool_input": {
+                "file_path": str(settings_file),
+                "content": json.dumps(content),
+            }
+        }
         code, _, _ = run_hook(self.HOOK, payload)
         assert code == 2, "nested ** pattern was not blocked"
 
@@ -593,7 +608,7 @@ class TestScanPromptInjectionIntentGaps:
         payload = self._make_post_tool_payload(text)
         code, _, stdout = run_hook(self.HOOK, payload)
         assert "PROMPT INJECTION WARNING" in stdout, (
-            f"injection with newline insertion was not detected"
+            "injection with newline insertion was not detected"
         )
 
     def test_system_override_with_extra_spaces(self):

@@ -32,7 +32,7 @@ class TestCheckDocstrings:
         f.write_text("def compute(x, y):\n    a = x + y\n    b = a * 2\n    return b\n")
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
-        assert "missing docstrings" in stdout.lower()
+        assert "# HOOK:DOCSTRING:" in f.read_text()
 
     def test_no_warn_with_docstring(self, tmp_path: Path) -> None:
         """Func with a docstring should not trigger any warning."""
@@ -46,15 +46,17 @@ class TestCheckDocstrings:
         )
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
-        assert "missing docstrings" not in stdout.lower()
+        assert "# HOOK:DOCSTRING:" not in f.read_text()
 
     def test_skips_test_files(self, tmp_path: Path) -> None:
         """Files named test_*.py should be skipped entirely."""
         f = tmp_path / "test_module.py"
         f.write_text("def compute(x, y):\n    a = x + y\n    b = a * 2\n    return b\n")
+        original = f.read_text()
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
         assert stdout.strip() == ""
+        assert f.read_text() == original
 
     def test_warns_on_class_without_docstring(self, tmp_path: Path) -> None:
         """Class definition without docstring should trigger warning."""
@@ -62,7 +64,7 @@ class TestCheckDocstrings:
         f.write_text("class MyClass:\n    def method(self):\n        pass\n")
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
-        assert "missing docstrings" in stdout.lower()
+        assert "# HOOK:DOCSTRING:" in f.read_text()
 
     def test_warns_on_init_with_params_no_docstring(self, tmp_path: Path) -> None:
         """__init__ with params beyond self, no docstring (class HAS docstring) should warn."""
@@ -77,7 +79,7 @@ class TestCheckDocstrings:
         )
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
-        assert "missing docstrings" in stdout.lower()
+        assert "# HOOK:DOCSTRING:" in f.read_text()
 
     def test_no_warn_on_init_self_only(self, tmp_path: Path) -> None:
         """__init__(self) with no extra params, class has docstring -> no warning."""
@@ -92,7 +94,7 @@ class TestCheckDocstrings:
         )
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
-        assert "missing docstrings" not in stdout.lower()
+        assert "# HOOK:DOCSTRING:" not in f.read_text()
 
     def test_warns_on_async_def_without_docstring(self, tmp_path: Path) -> None:
         """async def with 3+ statements and no docstring should warn."""
@@ -105,7 +107,7 @@ class TestCheckDocstrings:
         )
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
-        assert "missing docstrings" in stdout.lower()
+        assert "# HOOK:DOCSTRING:" in f.read_text()
 
     def test_skips_files_in_claude_directory(self, tmp_path: Path) -> None:
         """Files inside a .claude/ subdirectory should be skipped."""
@@ -113,9 +115,11 @@ class TestCheckDocstrings:
         claude_dir.mkdir()
         f = claude_dir / "module.py"
         f.write_text("def compute(x, y):\n    a = x + y\n    b = a * 2\n    return b\n")
+        original = f.read_text()
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
         assert stdout.strip() == ""
+        assert f.read_text() == original
 
     def test_no_warn_on_trivial_two_statement_func(self, tmp_path: Path) -> None:
         """Function with only 2 statements (trivial) should not trigger warning."""
@@ -123,15 +127,17 @@ class TestCheckDocstrings:
         f.write_text("def compute(x, y):\n    a = x + y\n    return a\n")
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
-        assert "missing docstrings" not in stdout.lower()
+        assert "# HOOK:DOCSTRING:" not in f.read_text()
 
     def test_skips_init_py(self, tmp_path: Path) -> None:
         """__init__.py files should be skipped entirely."""
         f = tmp_path / "__init__.py"
         f.write_text("def compute(x, y):\n    a = x + y\n    b = a * 2\n    return b\n")
+        original = f.read_text()
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
         assert stdout.strip() == ""
+        assert f.read_text() == original
 
     def test_skips_private_functions(self, tmp_path: Path) -> None:
         """Private functions (_helper) should not trigger warnings."""
@@ -141,23 +147,27 @@ class TestCheckDocstrings:
         )
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
-        assert stdout.strip() == ""
+        assert "# HOOK:DOCSTRING:" not in f.read_text()
 
     def test_skips_conftest_py(self, tmp_path: Path) -> None:
         """conftest.py should be skipped entirely."""
         f = tmp_path / "conftest.py"
         f.write_text("def compute(x, y):\n    a = x + y\n    b = a * 2\n    return b\n")
+        original = f.read_text()
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
         assert stdout.strip() == ""
+        assert f.read_text() == original
 
     def test_skips_setup_py(self, tmp_path: Path) -> None:
         """setup.py should be skipped entirely."""
         f = tmp_path / "setup.py"
         f.write_text("def compute(x, y):\n    a = x + y\n    b = a * 2\n    return b\n")
+        original = f.read_text()
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
         assert stdout.strip() == ""
+        assert f.read_text() == original
 
     def test_skips_dunder_methods(self, tmp_path: Path) -> None:
         """Dunder methods other than __init__ should not trigger warnings."""
@@ -172,7 +182,7 @@ class TestCheckDocstrings:
         )
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
-        assert "missing docstrings" not in stdout.lower()
+        assert "# HOOK:DOCSTRING:" not in f.read_text()
 
     @given(
         name=st.from_regex(r"[a-z_][a-z0-9_]{1,20}", fullmatch=True),
@@ -183,7 +193,7 @@ class TestCheckDocstrings:
     def test_docstring_detection_property(
         self, name: str, stmt_count: int, has_docstring: bool
     ) -> None:
-        """Property: public funcs with docstring -> no warning; without -> warning."""
+        """Property: public funcs with docstring -> no injection; without -> injection."""
         assume(not name.startswith("_"))
 
         statements = "\n".join(f"    x{i} = {i}" for i in range(stmt_count))
@@ -199,10 +209,86 @@ class TestCheckDocstrings:
             f.write_text(source)
             rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
             assert rc == 0
+            content = f.read_text()
             if has_docstring:
-                assert "missing docstrings" not in stdout.lower()
+                assert "# HOOK:DOCSTRING:" not in content
             else:
-                assert "missing docstrings" in stdout.lower()
+                assert "# HOOK:DOCSTRING:" in content
+
+    # -- New injection-specific tests --
+
+    def test_docstring_injects_comment_for_missing_docstring(
+        self, tmp_path: Path
+    ) -> None:
+        """File with a non-trivial function, no docstring -> # HOOK:DOCSTRING: comment injected."""
+        f = tmp_path / "module.py"
+        f.write_text("def compute(x, y):\n    a = x + y\n    b = a * 2\n    return b\n")
+        rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
+        assert rc == 0
+        content = f.read_text()
+        assert "# HOOK:DOCSTRING: missing docstring for function 'compute'" in content
+
+    def test_docstring_no_injection_when_all_documented(self, tmp_path: Path) -> None:
+        """File where all functions have docstrings -> no # HOOK:DOCSTRING: in file."""
+        f = tmp_path / "module.py"
+        f.write_text(
+            "def compute(x, y):\n"
+            '    """Compute result."""\n'
+            "    a = x + y\n"
+            "    b = a * 2\n"
+            "    return b\n"
+            "\n"
+            "def transform(data):\n"
+            '    """Transform data."""\n'
+            "    result = data.copy()\n"
+            "    result.append(1)\n"
+            "    return result\n"
+        )
+        rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
+        assert rc == 0
+        assert "# HOOK:DOCSTRING:" not in f.read_text()
+
+    def test_docstring_self_cleaning(self, tmp_path: Path) -> None:
+        """File with stale # HOOK:DOCSTRING: comment, but function now HAS docstring -> stale comment removed."""
+        f = tmp_path / "module.py"
+        f.write_text(
+            "# HOOK:DOCSTRING: missing docstring for function 'compute'\n"
+            "def compute(x, y):\n"
+            '    """Now documented."""\n'
+            "    a = x + y\n"
+            "    b = a * 2\n"
+            "    return b\n"
+        )
+        rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
+        assert rc == 0
+        content = f.read_text()
+        assert "# HOOK:DOCSTRING:" not in content
+        # The original code should remain intact (minus the stale comment)
+        assert "def compute(x, y):" in content
+
+    def test_docstring_inside_string_literal_not_corrupted(
+        self, tmp_path: Path
+    ) -> None:
+        """File with a string literal containing '# HOOK:DOCSTRING:' text -> string preserved."""
+        f = tmp_path / "module.py"
+        f.write_text(
+            "def compute(x, y):\n"
+            '    """Compute values."""\n'
+            '    MSG = "# HOOK:DOCSTRING: this is inside a string"\n'
+            "    a = x + y\n"
+            "    b = a * 2\n"
+            "    return b\n"
+        )
+        rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
+        assert rc == 0
+        content = f.read_text()
+        # The string literal line should be preserved -- remove_hook_comments only
+        # removes lines whose stripped form starts with '# HOOK:DOCSTRING:'
+        assert '    MSG = "# HOOK:DOCSTRING: this is inside a string"' in content
+        # No actual HOOK comments should be injected (function has docstring)
+        lines = content.splitlines()
+        hook_lines = [ln for ln in lines if ln.strip().startswith("# HOOK:DOCSTRING:")]
+        assert len(hook_lines) == 0
 
 
 # =====================================================================
@@ -219,7 +305,7 @@ class TestCheckRandomSeeds:
         f.write_text("import random\nx = random.random()\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" in stdout.lower()
+        assert "# HOOK:SEED:" in f.read_text()
 
     def test_no_warn_with_seed(self, tmp_path: Path) -> None:
         """import random with seed should not warn."""
@@ -227,7 +313,7 @@ class TestCheckRandomSeeds:
         f.write_text("import random\nrandom.seed(42)\nx = random.random()\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" not in stdout.lower()
+        assert "# HOOK:SEED:" not in f.read_text()
 
     def test_warns_on_numpy_without_seed(self, tmp_path: Path) -> None:
         """import numpy without seed should warn."""
@@ -235,7 +321,7 @@ class TestCheckRandomSeeds:
         f.write_text("import numpy as np\nx = np.random.rand()\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" in stdout.lower()
+        assert "# HOOK:SEED:" in f.read_text()
 
     def test_no_warn_on_numpy_with_seed(self, tmp_path: Path) -> None:
         """import numpy with seed should not warn."""
@@ -243,7 +329,7 @@ class TestCheckRandomSeeds:
         f.write_text("import numpy as np\nnp.random.seed(42)\nx = np.random.rand()\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" not in stdout.lower()
+        assert "# HOOK:SEED:" not in f.read_text()
 
     def test_warns_on_torch_without_seed(self, tmp_path: Path) -> None:
         """import torch without seed should warn."""
@@ -251,7 +337,7 @@ class TestCheckRandomSeeds:
         f.write_text("import torch\nx = torch.randn(3, 3)\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" in stdout.lower()
+        assert "# HOOK:SEED:" in f.read_text()
 
     def test_warns_on_tensorflow_without_seed(self, tmp_path: Path) -> None:
         """import tensorflow without seed should warn."""
@@ -259,7 +345,7 @@ class TestCheckRandomSeeds:
         f.write_text("import tensorflow as tf\nx = tf.random.normal([3, 3])\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" in stdout.lower()
+        assert "# HOOK:SEED:" in f.read_text()
 
     def test_warns_on_scipy_stats_without_seed(self, tmp_path: Path) -> None:
         """from scipy.stats without seed should warn."""
@@ -267,7 +353,7 @@ class TestCheckRandomSeeds:
         f.write_text("from scipy.stats import norm\nx = norm.rvs(size=10)\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" in stdout.lower()
+        assert "# HOOK:SEED:" in f.read_text()
 
     def test_no_warn_on_pythonhashseed_reference(self, tmp_path: Path) -> None:
         """PYTHONHASHSEED reference counts as seed-setting."""
@@ -275,7 +361,7 @@ class TestCheckRandomSeeds:
         f.write_text("import os\nimport random\nos.environ['PYTHONHASHSEED'] = '42'\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" not in stdout.lower()
+        assert "# HOOK:SEED:" not in f.read_text()
 
     def test_no_warn_on_sklearn_random_state(self, tmp_path: Path) -> None:
         """sklearn with random_state=42 should not warn."""
@@ -286,7 +372,7 @@ class TestCheckRandomSeeds:
         )
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" not in stdout.lower()
+        assert "# HOOK:SEED:" not in f.read_text()
 
     def test_warns_on_r_file_without_seed(self, tmp_path: Path) -> None:
         """R file with sample() but no set.seed() should warn."""
@@ -294,7 +380,7 @@ class TestCheckRandomSeeds:
         f.write_text("x <- sample(1:100, 10)\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no set.seed()" in stdout.lower() or "no seed is set" in stdout.lower()
+        assert "# HOOK:SEED:" in f.read_text()
 
     def test_warns_on_from_random_import(self, tmp_path: Path) -> None:
         """'from random import randint' should trigger warning."""
@@ -302,15 +388,17 @@ class TestCheckRandomSeeds:
         f.write_text("from random import randint\nx = randint(1, 100)\n")
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" in stdout.lower()
+        assert "# HOOK:SEED:" in f.read_text()
 
     def test_skips_test_files(self, tmp_path: Path) -> None:
         """Test files should be skipped entirely (seeds in tests are optional)."""
         f = tmp_path / "test_analysis.py"
         f.write_text("import random\nx = random.random()\n")
+        original = f.read_text()
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
         assert stdout.strip() == ""
+        assert f.read_text() == original
 
     def test_skips_files_in_claude_directory(self, tmp_path: Path) -> None:
         """Files inside .claude/ should be skipped."""
@@ -318,9 +406,11 @@ class TestCheckRandomSeeds:
         claude_dir.mkdir()
         f = claude_dir / "analysis.py"
         f.write_text("import random\nx = random.random()\n")
+        original = f.read_text()
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
         assert stdout.strip() == ""
+        assert f.read_text() == original
 
     @given(
         module=st.sampled_from(["random", "numpy"]),
@@ -328,7 +418,7 @@ class TestCheckRandomSeeds:
     )
     @settings(max_examples=100)
     def test_seed_detection_property(self, module: str, seeded: bool) -> None:
-        """Property: seeded -> no warning, unseeded -> warning."""
+        """Property: seeded -> no injection, unseeded -> injection."""
         if module == "random":
             import_line = "import random"
             seed_line = "random.seed(42)"
@@ -351,10 +441,60 @@ class TestCheckRandomSeeds:
                 "check_random_seeds.py", _make_payload(str(f))
             )
             assert rc == 0
+            content = f.read_text()
             if seeded:
-                assert "no seed is set" not in stdout.lower()
+                assert "# HOOK:SEED:" not in content
             else:
-                assert "no seed is set" in stdout.lower()
+                assert "# HOOK:SEED:" in content
+
+    # -- New injection-specific tests --
+
+    def test_seeds_injects_comment_for_unseeded_random(self, tmp_path: Path) -> None:
+        """File with import random, no seed -> # HOOK:SEED: comment injected."""
+        f = tmp_path / "analysis.py"
+        f.write_text("import random\nx = random.random()\n")
+        rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
+        assert rc == 0
+        content = f.read_text()
+        assert "# HOOK:SEED: random module used without seed" in content
+
+    def test_seeds_no_injection_when_seeded(self, tmp_path: Path) -> None:
+        """File with import random + random.seed(42) -> no # HOOK:SEED: in file."""
+        f = tmp_path / "analysis.py"
+        f.write_text("import random\nrandom.seed(42)\nx = random.random()\n")
+        rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
+        assert rc == 0
+        assert "# HOOK:SEED:" not in f.read_text()
+
+    def test_seeds_self_cleaning(self, tmp_path: Path) -> None:
+        """Stale # HOOK:SEED: comment removed when seed is now present."""
+        f = tmp_path / "analysis.py"
+        f.write_text(
+            "# HOOK:SEED: random module used without seed\n"
+            "import random\nrandom.seed(42)\nx = random.random()\n"
+        )
+        rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
+        assert rc == 0
+        content = f.read_text()
+        assert "# HOOK:SEED:" not in content
+        assert "import random" in content
+
+    def test_seeds_inside_string_literal_not_corrupted(self, tmp_path: Path) -> None:
+        """String literal containing '# HOOK:SEED:' text is preserved, not stripped."""
+        f = tmp_path / "analysis.py"
+        f.write_text(
+            "import random\nrandom.seed(42)\n"
+            'MSG = "# HOOK:SEED: this is inside a string"\n'
+            "x = random.random()\n"
+        )
+        rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
+        assert rc == 0
+        content = f.read_text()
+        assert 'MSG = "# HOOK:SEED: this is inside a string"' in content
+        hook_lines = [
+            ln for ln in content.splitlines() if ln.strip().startswith("# HOOK:SEED:")
+        ]
+        assert len(hook_lines) == 0
 
 
 # =====================================================================
@@ -547,7 +687,7 @@ class TestCheckTestPairDepth:
             src_dir.mkdir(parents=True, exist_ok=True)
             f = src_dir / f"{module_name}.py"
             f.write_text("x = 1\n")
-            # Create tests/ at base level — too far away
+            # Create tests/ at base level -- too far away
             tests_dir = base / "tests"
             tests_dir.mkdir(exist_ok=True)
             test_f = tests_dir / f"test_{module_name}.py"
@@ -609,10 +749,11 @@ class TestDocstringTriviality:
             payload = _make_payload(str(f))
             rc, stderr, stdout = run_hook("check_docstrings.py", payload)
             assert rc == 0
+            content = f.read_text()
             if total_statements <= 2:
-                assert "missing docstrings" not in stdout.lower()
+                assert "# HOOK:DOCSTRING:" not in content
             else:
-                assert "missing docstrings" in stdout.lower()
+                assert "# HOOK:DOCSTRING:" in content
 
 
 # =====================================================================
@@ -648,7 +789,7 @@ class TestSeedDetectionContext:
         f.write_text(code)
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" not in stdout.lower()
+        assert "# HOOK:SEED:" not in f.read_text()
 
     @pytest.mark.parametrize("seed_line", SEED_IN_COMMENT)
     @pytest.mark.xfail(
@@ -664,7 +805,7 @@ class TestSeedDetectionContext:
         f.write_text(code)
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" in stdout.lower()
+        assert "# HOOK:SEED:" in f.read_text()
 
     @pytest.mark.parametrize("seed_line", SEED_IN_STRING)
     @pytest.mark.xfail(
@@ -680,4 +821,4 @@ class TestSeedDetectionContext:
         f.write_text(code)
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
-        assert "no seed is set" in stdout.lower()
+        assert "# HOOK:SEED:" in f.read_text()

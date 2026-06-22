@@ -14,6 +14,17 @@ from tests.test_hooks.hook_runner import HOOKS_DIR, run_bash_hook, run_hook
 __all__ = ["HOOKS_DIR", "run_hook", "run_bash_hook"]
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Auto-mark any test using Hypothesis's @given decorator."""
+    hypothesis_marker = pytest.mark.hypothesis
+    for item in items:
+        if any(marker.name == "hypothesis" for marker in item.iter_markers()):
+            continue
+        obj = getattr(item, "obj", None)
+        if obj is not None and getattr(obj, "is_hypothesis_test", False):
+            item.add_marker(hypothesis_marker)
+
+
 @pytest.fixture
 def read_payload():
     def _make(file_path: str) -> dict[str, Any]:

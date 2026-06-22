@@ -17,9 +17,10 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -q -n6 -m 'not network'"
+addopts = "-ra -n6 -m 'not network and not hypothesis'"
 markers = [
     "network: tests that make real network calls (e.g. pip-audit hitting PyPI)",
+    "hypothesis: property-based tests using Hypothesis (slow; deselected by default)",
 ]
 
 [tool.ruff]

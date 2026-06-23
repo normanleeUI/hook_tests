@@ -28,4 +28,5 @@ prompts/
 .idea
 .vscode
 .hook_state/
+*.hook_lock
 _scratch/

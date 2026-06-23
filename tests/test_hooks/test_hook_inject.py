@@ -9,6 +9,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
+# HOOK:PYRIGHT: Import "hook_inject" could not be resolved (reportMissingImports)
 from hook_inject import (
     ensure_state_dir,
     get_state_dir,
@@ -57,7 +58,7 @@ class TestInjectAtLine:
         original = ["line1\n", "line2\n", "line3\n"]
         lines = list(original)
         inject_at_line(lines, 2, "TEST", "found issue")
-        non_hook = [l for l in lines if not l.startswith("# HOOK:")]
+        non_hook = [line for line in lines if not line.startswith("# HOOK:")]
         assert non_hook == original
 
 

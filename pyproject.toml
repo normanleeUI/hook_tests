@@ -23,6 +23,7 @@ addopts = "-ra -n6 -m 'not network and not hypothesis'"
 markers = [
     "network: tests that make real network calls (e.g. pip-audit hitting PyPI)",
     "hypothesis: property-based tests using Hypothesis (slow; deselected by default)",
+    "slow: marks tests as slow",
 ]
 
 [tool.ruff]

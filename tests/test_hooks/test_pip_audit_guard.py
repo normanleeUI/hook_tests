@@ -10,7 +10,6 @@ Exit codes: 0 = allow operation, 2 = block (vulnerabilities previously found).
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest

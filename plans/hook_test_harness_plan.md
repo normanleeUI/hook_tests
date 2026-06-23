@@ -5183,55 +5183,55 @@ This is not adversarial red-teaming — it's asking "are there *normal* command 
 
 ## Exit Checklist
 
-- [ ] `pytest tests/test_hooks/ -v` — all tests pass
-- [ ] Every Tier 1 hook (6) has hypothesis property tests with `max_examples=200`
-- [ ] `test_pip_audit_check.py` tests command gate with hypothesis (non-matching exits 0)
-- [ ] `test_pip_audit_check.py` tests exitCode gate with hypothesis (non-zero exits 0)
-- [ ] `test_pip_audit_check.py` verifies hook engages for matching+exitCode=0 (stderr contains `[pip-audit]`)
-- [ ] Secret scanner patterns (8 regexes) have hypothesis tests
-- [ ] `test_scan_secrets_gate.py` tests hook with clean staged content (exit 0)
-- [ ] `test_scan_secrets_gate.py` tests hook with secret-containing staged content (exit 2) using hypothesis
-- [ ] Prompt injection patterns have example + property tests
-- [ ] Tier 2 hooks (3) have fixture-based tests with temp files + hypothesis over generated content
-- [ ] `test_block_glob_deny_rules.py` has hypothesis tests over generated JSON settings
-- [ ] `test_tier2_hooks.py` has hypothesis tests for docstring detection (varying func shape)
-- [ ] `test_tier2_hooks.py` has hypothesis tests for seed detection (varying import/seed combos)
-- [ ] `conftest.py` `run_hook()` uses subprocess-only invocation
-- [ ] `conftest.py` `run_hook()` supports `env` and `cwd` parameters
-- [ ] All tests use subprocess to pipe JSON (no direct imports)
-- [ ] `test_hook_wiring.py` validates all 19 canonical hooks are wired
-- [ ] `test_hook_wiring.py` detects deprecated hooks not wired
-- [ ] `test_hook_wiring.py` detects orphan scripts on disk
-- [ ] `test_hook_wiring.py` validates matcher tool names and if: patterns
-- [ ] Step 0c experiments completed: hook execution order, blocking cascade, side-effect visibility documented
-- [ ] TESTING.md covers all 19 hooks with wiring tests
-- [ ] Each TESTING.md section includes the raw matcher/if config from settings.json
-- [ ] Each TESTING.md section has 3+ command/action variations (positive AND negative)
-- [ ] Each TESTING.md section specifies the observation method (BLOCKED/STDERR/STATUS/MODEL-ONLY/SIDE-EFFECT)
-- [ ] TESTING.md includes cross-cutting wiring tests (Edit vs Write matcher, blocking cascade, PreToolUse Bash group)
-- [ ] pip_audit_check.py wiring confirmed in live session (PRIORITY — original catalyst)
-- [ ] `src/` fixture files compile without errors
-- [ ] `setup.sh` runs successfully from a clean state
-- [ ] Initial git commit includes all non-secret files
-- [ ] Mutmut runs against 6 blocking hooks with >80% kill rate
-- [ ] Surviving mutants classified as equivalent or covered by new tests
-- [ ] `test_shell_wrappers.py` covers all 7 shell hooks with gate-logic tests
-- [ ] Shell wrapper tests use fake-tool stubs (don't invoke real ruff/pyright/bandit)
-- [ ] `test_adversarial_payloads.py` covers all 19 hooks with malformed input
-- [ ] No hook produces "Traceback" on any adversarial payload
-- [ ] `test_block_bare_pip.py` includes shell structure tests (&&, pipes, env vars, sudo)
-- [ ] `test_block_git_add_env.py` includes `-u`, `-v .`, `git -C` patterns
-- [ ] `test_check_dependency_pins.py` has hypothesis over dep spec strings
-- [ ] Known environment-marker bug is documented with a test that will fail when fixed
-- [ ] `test_prompt_injection.py` includes Unicode/invisible-char hypothesis tests
-- [ ] `test_block_glob_deny_rules.py` has input-source verification test
-- [ ] `test_tier2_hooks.py` has directory depth tests for check_test_pair (0-2 found, 3+ not found)
-- [ ] `test_performance.py` establishes <2s baseline for all Python hooks
-- [ ] No hook exhibits regex backtracking on pathological input
-- [ ] `test_intent_gaps.py` has xfail tests for all known spec conflicts from Steps 3–6
-- [ ] `test_intent_gaps.py` has hypothesis sweeps for new gaps in regex-based hooks
-- [ ] All xfails use `strict=True` and have specific reason strings
-- [ ] Any hypothesis sweep that finds no gap is converted to a regular passing test
+- [x] `pytest tests/test_hooks/ -v` — all tests pass
+- [x] Every Tier 1 hook (6) has hypothesis property tests with `max_examples=200`
+- [x] `test_pip_audit_check.py` tests command gate with hypothesis (non-matching exits 0)
+- [x] `test_pip_audit_check.py` tests exitCode gate with hypothesis (non-zero exits 0)
+- [x] `test_pip_audit_check.py` verifies hook engages for matching+exitCode=0 (stderr contains `[pip-audit]`)
+- [x] Secret scanner patterns (8 regexes) have hypothesis tests
+- [x] `test_scan_secrets_gate.py` tests hook with clean staged content (exit 0)
+- [x] `test_scan_secrets_gate.py` tests hook with secret-containing staged content (exit 2) using hypothesis
+- [x] Prompt injection patterns have example + property tests
+- [x] Tier 2 hooks (3) have fixture-based tests with temp files + hypothesis over generated content
+- [x] `test_block_glob_deny_rules.py` has hypothesis tests over generated JSON settings
+- [x] `test_tier2_hooks.py` has hypothesis tests for docstring detection (varying func shape)
+- [x] `test_tier2_hooks.py` has hypothesis tests for seed detection (varying import/seed combos)
+- [x] `conftest.py` `run_hook()` uses subprocess-only invocation
+- [x] `conftest.py` `run_hook()` supports `env` and `cwd` parameters
+- [x] All tests use subprocess to pipe JSON (no direct imports)
+- [x] `test_hook_wiring.py` validates all 19 canonical hooks are wired
+- [x] `test_hook_wiring.py` detects deprecated hooks not wired
+- [x] `test_hook_wiring.py` detects orphan scripts on disk
+- [x] `test_hook_wiring.py` validates matcher tool names and if: patterns
+- [x] Step 0c experiments completed: hook execution order, blocking cascade, side-effect visibility documented
+- [x] TESTING.md covers all 19 hooks with wiring tests
+- [x] Each TESTING.md section includes the raw matcher/if config from settings.json
+- [x] Each TESTING.md section has 3+ command/action variations (positive AND negative)
+- [x] Each TESTING.md section specifies the observation method (BLOCKED/STDERR/STATUS/MODEL-ONLY/SIDE-EFFECT)
+- [x] TESTING.md includes cross-cutting wiring tests (Edit vs Write matcher, blocking cascade, PreToolUse Bash group)
+- [x] pip_audit_check.py wiring confirmed in live session (PRIORITY — original catalyst)
+- [x] `src/` fixture files compile without errors
+- [x] `setup.sh` runs successfully from a clean state
+- [x] Initial git commit includes all non-secret files
+- [x] Mutmut runs against 6 blocking hooks with >80% kill rate
+- [x] Surviving mutants classified as equivalent or covered by new tests
+- [x] `test_shell_wrappers.py` covers all 7 shell hooks with gate-logic tests
+- [x] Shell wrapper tests use fake-tool stubs (don't invoke real ruff/pyright/bandit)
+- [x] `test_adversarial_payloads.py` covers all 19 hooks with malformed input
+- [x] No hook produces "Traceback" on any adversarial payload
+- [x] `test_block_bare_pip.py` includes shell structure tests (&&, pipes, env vars, sudo)
+- [x] `test_block_git_add_env.py` includes `-u`, `-v .`, `git -C` patterns
+- [x] `test_check_dependency_pins.py` has hypothesis over dep spec strings
+- [x] Known environment-marker bug is documented with a test that will fail when fixed
+- [x] `test_prompt_injection.py` includes Unicode/invisible-char hypothesis tests
+- [x] `test_block_glob_deny_rules.py` has input-source verification test
+- [x] `test_tier2_hooks.py` has directory depth tests for check_test_pair (0-2 found, 3+ not found)
+- [x] `test_performance.py` establishes <2s baseline for all Python hooks
+- [x] No hook exhibits regex backtracking on pathological input
+- [x] `test_intent_gaps.py` has xfail tests for all known spec conflicts from Steps 3–6
+- [x] `test_intent_gaps.py` has hypothesis sweeps for new gaps in regex-based hooks
+- [x] All xfails use `strict=True` and have specific reason strings
+- [x] Any hypothesis sweep that finds no gap is converted to a regular passing test
 
 ---
 

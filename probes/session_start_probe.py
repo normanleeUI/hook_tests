@@ -10,12 +10,13 @@ import os
 import sys
 
 sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
+# HOOK:PYRIGHT: Import "hook_log" could not be resolved (reportMissingImports)
 from hook_log import log_hook
 
 probe_id = os.environ.get("PROBE_ID", "session_start")
 payload = json.load(sys.stdin)
 
-log_hook(f"probe_{probe_id}", f"exit=0 session_start")
+log_hook(f"probe_{probe_id}", "exit=0 session_start")
 
 print(
     "HOOK NOTICE: SessionStart probe fired. The code word is MANGO. "

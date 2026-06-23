@@ -1,540 +1,563 @@
 # Interactive Hook Wiring Playbook
 
-Manual QA checklist for verifying that Claude Code hooks **actually fire** when expected during a live session. This does NOT test hook logic (automated tests cover that). This tests whether Claude Code's runtime dispatching correctly invokes hooks based on matchers, `if:` conditions, and event types.
+Manual QA checklist for verifying that Claude Code hooks **actually fire** in a live
+session. Automated tests cover hook logic (correct decisions for given inputs). This
+playbook tests the layer automated tests cannot reach: does Claude Code's runtime
+invoke the hook, and does the output reach the user or model through a working channel?
 
-## Prerequisites
+Tests are batched by interaction pattern to minimize context-switching. Work through
+the batches in order — some have dependencies on earlier results.
 
-- [x] Claude Code CLI installed and working
-- [x] Working directory is `hook_tests/` (this project)
-- [x] `~/.claude/settings.json` contains all 19 hook definitions
-- [x] Python virtual environment activated (`uv sync` or equivalent)
-- [x] All hook scripts are executable (`chmod +x hooks/*.py hooks/*.sh`)
-- [x] Git repo is initialized with a remote configured
-- [x] Fixture files exist in `src/` and `fixtures/` (see list at bottom)
-
-## Observation Guide
-
-| Code | Meaning | How to confirm |
-|------|---------|----------------|
-| **BLOCKED** | Hook exits 2; Claude shows block message and refuses the action | Claude prints a refusal/block message in the conversation |
-| **STDERR** | Text appears in CLI output below the conversation | Look for hook-specific prefixes in terminal output |
-| **STATUS** | `statusMessage` flashes briefly during execution | Watch for the flash text in the status bar area |
-| **MODEL-ONLY** | Hook stdout goes into Claude's context (system-reminder) | Check Claude's next response for evidence it received the info |
-| **SIDE-EFFECT** | Hook modifies files on disk | Check file timestamps or content with `git diff` after |
-
-**Tip**: Run with `--verbose` or check `~/.claude/debug/` logs if you cannot tell whether a hook fired.
-
-## Debug Log
-
-All hooks now log to `/tmp/hook_debug.log` on every invocation (added 2026-06-15). Check this file after any test to confirm whether a hook fired. This resolves the observability gap where exit-0 hooks were indistinguishable from hooks that never fired.
-
-Helper: `~/.claude/hooks/hook_log.py` — Python hooks import it; Bash hooks inline a `printf` equivalent.
-
-## TODO (2026-06-15)
-
-Discoveries from the first manual testing pass that need follow-up:
-
-- [ ] **`scan_secrets_on_commit` logic failure**: Hook fires (confirmed by debug log) but fails to block commits containing `sk-ant-` patterns. Suspect `git diff --cached` returns empty in the hook subprocess context (PreToolUse fires *before* the tool runs, so the commit hasn't happened yet — but the file IS staged). Investigate what the hook actually sees.
-- [ ] **`pip_audit_check` logic failure**: Hook fires on all Bash commands (debug log confirms) but never produces visible output. Original diagnosis was wiring failure; now believed to be `uvx pip-audit` timing out under sandbox network restrictions. Investigate whether the hook silently catches the timeout.
-- [ ] **`if:` conditions don't filter**: Debug log shows all Bash-matched hooks fire on EVERY Bash command regardless of `if:` condition. Either `if:` doesn't work as documented, or the hook receives the input and must filter internally. Clarify expected behavior.
-- [ ] **Re-run section 1 tests with debug log**: Original results were diagnosed as wiring failures. Now that we know hooks fire, re-test and check debug log to get accurate diagnoses.
-- [ ] **statusMessage never visible on PreToolUse hooks**: Tested on `block_read_env` — never flashes for blocks, allows, or negative tests. May be a Claude Code limitation for PreToolUse event type.
-- [ ] **stderr visibility differs by tool type**: Read tool blocks don't show stderr in console; Bash tool blocks do. Both use the same mechanism (stderr + exit 2). Investigate whether this is a Claude Code UI bug or intentional.
+**Tools you'll use:**
+- `./scripts/verify_prerequisites.sh` — pre-flight environment check
+- `./scripts/observe.sh <hook> [file]` — post-test observation (debug log + inline comments + state files)
+- `./scripts/observe.sh --all [file]` — show all hooks that fired (for cross-cutting tests)
+- `./scripts/observe.sh --reset` — clear observation state between batches
 
 ---
 
-## 1. pip_audit_check.py (PRIORITY)
+## Reference: Observation Guide
 
-> **Config**: PostToolUse, matcher=`Bash`, if=`Bash(*uv add*)|Bash(*uv sync*)|Bash(*uv pip install*)`, statusMessage: "Auditing dependencies for vulnerabilities..."
->
-> **Observe via**: STDERR ("[pip-audit]" prefix) + STATUS
+Empirically validated output channels (see `probes/PROBE_RESULTS_PHASE2.md`):
 
-### Positive tests (hook SHOULD fire)
+| Code | Meaning | How to confirm | Status |
+|------|---------|----------------|--------|
+| **BLOCKED** | PreToolUse exit 2; action prevented | Claude reports block; stderr visible for Bash/Edit/Write | Working |
+| **INLINE** | `# HOOK:<NAME>: <msg>` injected into edited file | Read file after edit — look for `# HOOK:` lines | Working (Strategy B) |
+| **STATE-FILE** | Findings written to `.hook_state/<hook>/` | Check file existence/content | Working (Strategy C) |
+| **SIDE-EFFECT** | Hook modifies files on disk | `git diff` after edit | Working |
+| **MODEL-CONTEXT** | hookSpecificOutput.additionalContext → `<system-reminder>` | Claude's next response references it | Working (needs `hookEventName`) |
+| **SESSION-STDOUT** | SessionStart stdout reaches model | Claude's first response reflects it | Working |
+| ~~STATUS~~ | ~~statusMessage flash~~ | | **Never works** — ignore |
+| ~~STDERR (exit 0)~~ | ~~stderr on allow~~ | | **Never visible** |
 
-- [x] Ask Claude: "run uv add httpx" -- after install, STDERR shows "[pip-audit] Scanning..." then results
-  - **REVISED**: Originally diagnosed as wiring failure. Debug log (added 2026-06-15) shows `pip_audit_check` DOES fire on Bash commands — likely a **logic failure** (uvx pip-audit times out under sandbox network restrictions), not a wiring failure. Needs re-investigation with debug log.
-- [x] Ask Claude: "run uv sync" -- same "[pip-audit]" output appears
-  - **REVISED**: Same as above — hook likely fires but fails silently.
-- [x] Ask Claude: "run uv pip install requests" -- same "[pip-audit]" output appears
-  - **REVISED**: Same as above.
-- [x] Compound command: "cd /tmp && uv add httpx" -- does the glob still match?
-  - **REVISED**: Same as above. Also, `uv add` itself fails (no pyproject.toml in /tmp).
-
-### Negative tests (hook should NOT fire)
-
-- [x] "run uv lock" -- no [pip-audit] output (if: pattern doesn't match)
-  - **REVISED**: Debug log shows `pip_audit_check` fires on ALL Bash commands regardless of `if:` condition. So `if:` is not filtering — hook fires but produces no visible output. Needs re-investigation.
-- [x] "run git status" -- no [pip-audit] output
-  - **REVISED**: Same — hook fires (confirmed by debug log pattern), output not visible.
-- [x] "run uv add badpkg" where install fails -- hook fires but exits early
-  - **REVISED**: Hook fires (confirmed by debug log pattern). Sandbox network timeout caused the uv failure, not a missing package.
-
-### Investigation notes
-
-~~If positive tests fail, the issue is in Claude Code's runtime matcher.~~ **REVISED 2026-06-15**: Debug logging reveals all `if:`-conditioned hooks fire on every matching Bash command — the `if:` condition does NOT filter invocations. Failures are **logic bugs** in the hooks themselves, not wiring issues. The original "file-write debug probe" may have been testing the wrong thing.
+**Key limitations:**
+- Read matcher exit-2 blocks show only a red dot (stderr not rendered), but the block works
+- PostToolUse exit 2 is **cosmetic** — the edit already happened; only informs Claude
+- PostToolUse hooks in the same group run **in parallel** — file locking serializes writes
+- `if:` conditions work for single patterns; `|` OR syntax does NOT work
 
 ---
 
-## 2. SessionStart Hooks
+## Reference: Current Hook Wiring
 
-These fire once at session start, unconditionally (no matcher, no condition).
+20 active hooks across 8 groups:
 
-### 2a. project_health_check.py
-
-> **Config**: SessionStart, command=`python3`, statusMessage: "Checking project health..."
->
-> **Observe via**: MODEL-ONLY (stdout goes to system-reminder)
-
-#### Positive tests
-
-- [ ] Start a new Claude Code session in `hook_tests/` -- health check output appears in system-reminder; Claude's first response reflects awareness of project health
-- [ ] Delete `README.md`, restart session -- health check flags the missing README
-
-#### Negative tests
-
-- [ ] N/A -- fires unconditionally on every session start
+| Event | Matcher | Hooks | Strategy |
+|-------|---------|-------|----------|
+| SessionStart | (none) | project_health_check, git_pull_on_start, check_dep_freshness | stdout to model |
+| PreToolUse | Read | block_read_env | D (dual-wiring) |
+| PreToolUse | Bash | block_read_env, block_bare_pip, scan_secrets_on_commit (`if: git commit*`), block_git_add_env (`if: git add*`), pip_audit_guard | exit 2 blocks |
+| PreToolUse | Edit\|Write | check_dependency_pins, block_suppressions, block_glob_deny_rules | A (promotion) |
+| PostToolUse | Edit\|Write | ruff_format, pyright_check, check_docstrings, check_random_seeds, bandit_check, semgrep_check | B (inline injection) |
+| PostToolUse | Bash | pip_audit_check | C (state-file) |
+| PostToolUse | WebFetch\|mcp__.* | scan_prompt_injection | MODEL-CONTEXT |
+| Stop | (none) | ruff_lint | SIDE-EFFECT |
 
 ---
 
-### 2b. git_pull_on_start.sh
+## Known Issues
 
-> **Config**: SessionStart, command=`bash`, statusMessage: "Checking git remote for updates..."
->
-> **Observe via**: STATUS + STDERR
-
-#### Positive tests
-
-- [ ] Start session in a clean git repo with a configured remote -- STATUS flashes "Checking git remote for updates...", attempts pull
-- [ ] Push a commit from another machine/branch, then restart session -- pulls the new commit
-
-#### Negative tests
-
-- [ ] Uncommitted local changes present -- hook skips the pull
-- [ ] Start session in a non-git directory -- hook is silent
-- [ ] Repo has no remote configured -- hook is silent
+- [ ] **`scan_secrets_on_commit` logic bug**: Hook fires but `git diff --cached` returns empty in PreToolUse context (commit hasn't happened yet). Fundamental design issue, not a channel problem. Channel redesign did not address it.
 
 ---
 
-### 2c. check_dep_freshness.sh
+## Batch 0: Pre-session prep
 
-> **Config**: SessionStart, command=`bash`, statusMessage: "Checking dependency freshness..."
->
-> **Observe via**: STATUS + STDERR (WARNING prefix)
+Run in your normal terminal before starting any Claude session.
 
-#### Positive tests
+```bash
+cd ~/projects/hook_tests
 
-- [ ] Run `touch -d "60 days ago" .last_dep_check`, then restart session -- STDERR shows WARNING about stale dependencies
-- [ ] Run `touch .last_dep_check` (set to now), restart -- no warning, silent
+# 1. Verify environment
+./scripts/verify_prerequisites.sh
 
-#### Negative tests
+# 2. Stage a file with a fake secret for scan_secrets_on_commit test (Batch 2)
+echo 'API_KEY = "sk-ant-FAKE-key-here"' > src/staged_secret_test.py
+git add src/staged_secret_test.py
 
-- [ ] Delete `.last_dep_check` entirely -- hook handles gracefully (no crash)
+# 3. Set stale dep marker for check_dep_freshness test (Batch 1)
+touch -d "60 days ago" .last_dep_check
 
----
+# 4. Ensure .env files exist for blocker tests
+test -f .env.local      || echo 'DB_PASSWORD=fake-secret-for-testing' > .env.local
+test -f .env.production  || echo 'SECRET_KEY=fake-prod-secret-for-testing' > .env.production
 
-## 3. PreToolUse Hooks
+# 5. Clear stale state
+rm -f .hook_state/pip_audit/report.json 2>/dev/null
 
-### 3a. block_read_env.py
+# 6. Reset observation state
+./scripts/observe.sh --reset
+```
 
-> **Config**: PreToolUse, matcher=`Read`, no if:, statusMessage: "Checking for .env file read..."
->
-> **Observe via**: BLOCKED (exit 2) or STATUS (exit 0)
-
-#### Positive tests (should BLOCK)
-
-- [x] "Read .env" -- BLOCKED
-  - **PARTIAL**: Hook blocks correctly (exit 2), but stderr message is not visible in console — only reaches Claude as a tool error. statusMessage flash not observed either. Block message is effectively MODEL-ONLY. Note: Bash tool blocks DO show stderr in console (see 3b); this appears to be a Claude Code UI difference in how Read vs Bash tool errors are rendered.
-- [x] "Read .env.local" -- BLOCKED (same stderr visibility issue)
-- [x] "Read .env.production" -- BLOCKED (same stderr visibility issue)
-
-#### Positive tests (should ALLOW)
-
-- [x] "Read .env.example" -- allowed (not blocked; file contents shown)
-  - **PARTIAL**: statusMessage "Checking for .env file read..." did NOT flash.
-  - **INCONCLUSIVE on hook firing**: can't distinguish "hook fired and allowed" from "hook didn't fire." Correct outcome either way, but hook execution unconfirmed.
-- [x] "Read .env.sample" -- allowed (not blocked; file doesn't exist but not blocked)
-  - Same statusMessage and inconclusiveness issues.
-
-#### Negative tests
-
-- [x] "Read src/main.py" -- allowed (not blocked)
-  - **PARTIAL**: statusMessage still not visible. Appears to be a systemic issue — statusMessage never shows for this PreToolUse hook.
-  - **INCONCLUSIVE on hook firing**: same issue — correct outcome, but can't confirm hook ran.
+- [ ] verify_prerequisites.sh passes
+- [ ] staged_secret_test.py is staged in git
+- [ ] .last_dep_check set to 60 days ago
+- [ ] .env, .env.local, .env.production exist
+- [ ] .hook_state/pip_audit/report.json cleared
+- [ ] observation state reset
 
 ---
 
-### 3b. block_bare_pip.py
+## Batch 1: Session restarts (~15 min)
 
-> **Config**: PreToolUse, matcher=`Bash`, no if:, NO statusMessage
->
-> **Observe via**: BLOCKED only -- passing is invisible
+Each test requires a fresh Claude Code session. Do these first — they're the slowest.
 
-#### Positive tests (should BLOCK)
+### check_dep_freshness.sh
 
-- [x] "Run pip install requests" -- BLOCKED. Full stderr block message visible in console (unlike Read tool blocks).
-- [x] "Run cd /tmp && pip install requests" -- BLOCKED (same console visibility)
+> **Wiring**: SessionStart, no matcher.
+> **Observe via**: SESSION-STDOUT (if stale) + debug log.
 
-#### Known bugs (these BYPASS the block)
+**Test 1.1 — stale deps**
+> Pre-condition: `.last_dep_check` set to 60 days ago (Batch 0).
+> Start a new Claude Code session in `hook_tests/`.
 
-- [x] "Run pip3 install requests" -- NOT bypassed (pip3 not installed, but hook didn't block either — bypass confirmed, just no pip3 binary to exploit)
-- [x] "Run python -m pip install requests" -- **NOT A BUG**: regex `(^|[^./\w])pip\s+install\b` already catches this (space before `pip` doesn't match exclusion set). Plan incorrectly listed as bypass; confirmed working in commit 9b2241b.
-- [x] "Run python3 -m pip install requests" -- **NOT A BUG**: same reason as above.
+- [ ] Claude mentions stale dependencies in first response
+- [ ] `./scripts/observe.sh check_dep_freshness` — hook FIRED
 
-#### Positive tests (should ALLOW)
+**Test 1.2 — fresh deps**
+> Run in normal terminal: `touch .last_dep_check`
+> Start a new Claude Code session.
 
-- [x] "Run uv pip install requests" -- allowed (not blocked; network timeout from sandbox is unrelated)
-  - **INCONCLUSIVE on hook firing**: can't confirm hook ran and decided to allow vs. didn't fire.
-- [x] "Run ./.venv/bin/pip install requests" -- allowed (not blocked; no venv exists but irrelevant)
-  - **INCONCLUSIVE on hook firing**: same issue.
+- [ ] No staleness warning in Claude's first response
+- [ ] `./scripts/observe.sh check_dep_freshness` — hook FIRED (exited 0)
 
-#### Negative tests
+**Test 1.3 — missing marker file**
+> Run in normal terminal: `rm -f .last_dep_check`
+> Start a new Claude Code session.
 
-- [x] "Run git status" -- allowed (not blocked)
-  - **INCONCLUSIVE on hook firing**: wrote "unobservable" originally, which is the problem — can't confirm hook ran. Correct outcome either way.
+- [ ] No crash — hook handles gracefully
+- [ ] `./scripts/observe.sh check_dep_freshness` — hook FIRED
 
----
+### project_health_check.py
 
-### 3c. scan_secrets_on_commit.py
+> **Wiring**: SessionStart, no matcher.
+> **Observe via**: SESSION-STDOUT.
 
-> **Config**: PreToolUse, matcher=`Bash`, if=`Bash(git commit*)`, NO statusMessage
->
-> **Observe via**: BLOCKED (exit 2) or STDERR ("PASSED")
+**Test 1.4 — normal session**
+> Start a new Claude Code session in `hook_tests/`.
 
-#### Positive tests (should BLOCK)
+- [ ] Claude's first response reflects project health awareness
+- [ ] `./scripts/observe.sh project_health_check` — hook FIRED
 
-- [x] Stage a file containing `sk-ant-` followed by random characters, then "git commit -m 'test'" -- BLOCKED
-  - **LOGIC FAILURE** (not wiring): Debug log confirms `scan_secrets_on_commit` FIRED, but commit went through unblocked. Hook runs `git diff --cached` but fails to detect the secret — likely a subprocess/context issue where staged state isn't visible to the hook.
-- [ ] Stage `fixtures/staged_secret.py`, then commit -- BLOCKED
-  - SKIPPED: file already tracked with no changes; can't isolate as a staging test. Test 1 already demonstrates the wiring failure.
+**Test 1.5 — missing README**
+> Run in normal terminal: `mv README.md README.md.bak`
+> Start a new Claude Code session.
 
-#### Positive tests (should PASS)
+- [ ] Health check flags missing README
+- [ ] `./scripts/observe.sh project_health_check` — hook FIRED
+- [ ] Run in normal terminal: `mv README.md.bak README.md` (restore)
 
-- [x] Stage a clean file (no secrets), then commit -- STDERR shows "PASSED"
-  - **REVISED**: Debug log confirms hook fires on all Bash commands. Hook likely fired and passed, but stderr "PASSED" message not visible in console. Use debug log to confirm in future runs.
+### git_pull_on_start.sh
 
-#### Negative tests (hook should NOT fire)
+> **Wiring**: SessionStart, no matcher.
+> **Observe via**: SIDE-EFFECT (pulls changes) + debug log.
 
-- [ ] "git status" -- hook doesn't fire (if: requires `git commit*`)
-- [ ] "git add ." -- hook doesn't fire
-- [ ] "git log" -- hook doesn't fire
+**Test 1.6 — clean repo with remote**
+> Start a new Claude Code session.
 
----
+- [ ] `./scripts/observe.sh git_pull_on_start` — hook FIRED
 
-### 3d. block_git_add_env.py
+**Test 1.7 — uncommitted changes**
+> Run in normal terminal: `echo "# temp" >> README.md`
+> Start a new Claude Code session.
 
-> **Config**: PreToolUse, matcher=`Bash`, if=`Bash(git add*)`, NO statusMessage
->
-> **Observe via**: BLOCKED (exit 2)
+- [ ] Hook skips pull (doesn't clobber uncommitted work)
+- [ ] `./scripts/observe.sh git_pull_on_start` — hook FIRED
+- [ ] Run in normal terminal: `git checkout -- README.md` (restore)
 
-#### Positive tests (should BLOCK)
+### Batch 1 reset
 
-- [ ] "git add .env" -- BLOCKED
-- [ ] "git add ." -- BLOCKED (catches broad adds)
-- [ ] "git add -A" -- BLOCKED
-- [ ] "git add --all" -- BLOCKED
-
-#### Known bugs (these BYPASS the block)
-
-- [ ] "git add -v ." -- bypasses
-- [ ] "git add -u" -- bypasses
-- [ ] "git -C /tmp add ." -- bypasses
-
-#### Positive tests (should ALLOW)
-
-- [ ] "git add src/main.py" -- allowed (specific safe file)
-- [ ] "git add .env.example" -- allowed
-
-#### Negative tests (hook should NOT fire)
-
-- [ ] "git status" -- hook skipped (if: requires `git add*`)
-- [ ] "git commit -m 'test'" -- hook skipped
+```bash
+touch .last_dep_check  # restore normal state
+./scripts/observe.sh --reset
+```
 
 ---
 
-## 4. PostToolUse Edit|Write Hooks
+## Batch 2: Bash command barrage (~10 min)
 
-All 8 hooks below share matcher=`Edit|Write`. They fire on every Edit or Write of any file. The hook logic internally decides whether to act based on file type.
+All "run this command, check if blocked" — rapid fire. Stay in one Claude session.
+Phrase each as: "run `<command>`"
 
-### 4a. block_glob_deny_rules.py
+### block_read_env.py — Bash matcher (Strategy D dual-wiring)
 
-> **Config**: PostToolUse, matcher=`Edit|Write`, statusMessage: "Checking for dangerous glob patterns..."
->
-> **Observe via**: BLOCKED (exit 2) or STATUS
+> **Wiring**: PreToolUse, matcher=Bash, no `if:`.
+> **Observe via**: BLOCKED (exit 2, stderr visible).
+> Closes circumvention path where `cat .env` bypasses the Read tool block.
 
-#### Positive tests (should BLOCK)
+**Should BLOCK:**
 
-- [ ] Edit `.claude/settings.json` to add `Read(**/.env)` in a deny rule -- BLOCKED
+- [ ] 2.1: run `cat .env` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [ ] 2.2: run `head -5 .env.production` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [ ] 2.3: run `base64 .env` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [ ] 2.4: run `source .env` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [ ] 2.5: run `python3 -c 'open(".env").read()'` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [ ] 2.6: run `echo hello && cat .env` — BLOCKED → `./scripts/observe.sh block_read_env`
 
-#### Positive tests (should PASS)
+**Should ALLOW:**
 
-- [ ] Edit `.claude/settings.json` with specific file paths (not globs) -- allowed, STATUS flashes
+- [ ] 2.7: run `cat .env.example` — allowed → `./scripts/observe.sh block_read_env`
+- [ ] 2.8: run `cat .env.template` — allowed → `./scripts/observe.sh block_read_env`
+- [ ] 2.9: run `cat README.md` — allowed → `./scripts/observe.sh block_read_env`
 
-#### Negative tests
+### block_bare_pip.py
 
-- [ ] Edit a `.py` file -- hook fires, exits 0, STATUS may flash
+> **Wiring**: PreToolUse, matcher=Bash, no `if:`.
+> **Observe via**: BLOCKED (exit 2, stderr visible).
+> Logic thoroughly tested by automated tests — manual test confirms wiring only.
 
----
+- [ ] 2.10: run `pip install requests` — BLOCKED → `./scripts/observe.sh block_bare_pip`
+- [ ] 2.11: run `uv pip install requests` — allowed → `./scripts/observe.sh block_bare_pip`
+- [ ] 2.12: run `git status` — allowed, hook fired → `./scripts/observe.sh block_bare_pip`
 
-### 4b. ruff_format.sh
+### block_git_add_env.py
 
-> **Config**: PostToolUse, matcher=`Edit|Write`, NO statusMessage
->
-> **Observe via**: SIDE-EFFECT (file reformatted)
+> **Wiring**: PreToolUse, matcher=Bash, `if: Bash(git add*)`.
+> **Observe via**: BLOCKED (exit 2, stderr visible).
+> Logic thoroughly tested by automated tests — manual test confirms wiring only.
 
-#### Positive tests
+- [ ] 2.13: run `git add .env` — BLOCKED → `./scripts/observe.sh block_git_add_env`
+- [ ] 2.14: run `git add .` — BLOCKED → `./scripts/observe.sh block_git_add_env`
+- [ ] 2.15: run `git add src/clean_module.py` — allowed → `./scripts/observe.sh block_git_add_env`
+- [ ] 2.16: run `git status` — NOT FIRED (if: filters) → `./scripts/observe.sh block_git_add_env`
 
-- [ ] Ask Claude to edit a `.py` file with intentionally bad formatting (wrong indentation, missing spaces around operators) -- file is reformatted after edit; confirm with `git diff`
+### Cross-cutting: multiple Bash hooks share a matcher
 
-#### Negative tests
+> Multiple PreToolUse Bash hooks fire on every Bash command (unless `if:` filters).
+> Focus on which OTHER hooks fired alongside the primary one.
 
-- [ ] Edit a `.txt` file -- no formatting applied
-- [ ] Edit a `.json` file -- no formatting applied
+- [ ] 2.17: run `pip install requests` → `./scripts/observe.sh --all`
+  - block_bare_pip BLOCKS
+  - block_read_env (Bash) also fired? (yes — no `if:`)
+  - scan_secrets_on_commit fired? (no — `if: Bash(git commit*)` doesn't match)
+- [ ] 2.18: run `git add .env` → `./scripts/observe.sh --all`
+  - block_git_add_env BLOCKS
+  - block_bare_pip also fired? (yes — no `if:`)
+- [ ] 2.19: run `git commit -m 'test'` → `./scripts/observe.sh --all`
+  - scan_secrets_on_commit FIRES
+  - pip_audit_guard also fired? (yes — no `if:`)
 
----
+### `if:` condition filtering
 
-### 4c. pyright_check.sh
+> P13 confirmed single-pattern `if:` conditions work. `|` OR syntax does NOT.
 
-> **Config**: PostToolUse, matcher=`Edit|Write`, statusMessage: "Type-checking..."
->
-> **Observe via**: MODEL-ONLY (stdout) + STATUS
+- [ ] 2.20: run `git commit -m 'test wiring'` — scan_secrets FIRES → `./scripts/observe.sh scan_secrets_on_commit`
+- [ ] 2.21: run `git status` — scan_secrets NOT FIRED → `./scripts/observe.sh scan_secrets_on_commit`
+- [ ] 2.22: run `git add .` — block_git_add_env FIRES → `./scripts/observe.sh block_git_add_env`
+- [ ] 2.23: run `echo hello` — block_git_add_env NOT FIRED → `./scripts/observe.sh block_git_add_env`
 
-#### Positive tests
+### scan_secrets_on_commit — logic bug investigation
 
-- [ ] Edit `src/type_errors.py` (contains type errors) -- Claude mentions type issues in its response
-- [ ] Edit a clean `.py` file -- STATUS flashes "Type-checking...", no type errors reported
+> **Wiring**: PreToolUse, matcher=Bash, `if: Bash(git commit*)`.
+> **Known bug**: `git diff --cached` sees nothing in PreToolUse context.
 
-#### Negative tests
+- [ ] 2.24: run `git commit -m 'secret test'` → `./scripts/observe.sh scan_secrets_on_commit`
+  - Hook fires but may NOT block (known bug)
+  - Check debug log for what `git diff --cached` returned
 
-- [ ] Edit a `.txt` file -- hook skipped
-- [ ] Edit a file inside `~/.claude/` -- hook skipped
-
----
-
-### 4d. check_docstrings.py
-
-> **Config**: PostToolUse, matcher=`Edit|Write`, statusMessage: "Checking docstrings..."
->
-> **Observe via**: MODEL-ONLY (stdout) + STATUS
-
-#### Positive tests
-
-- [ ] Edit `src/missing_docstrings.py` -- Claude mentions missing docstrings in response
-
-#### Negative tests
-
-- [ ] Edit a `test_*.py` file -- hook skipped (test files excluded)
-- [ ] Edit `__init__.py` -- hook skipped
-- [ ] Edit a `.txt` file -- hook skipped
-
----
-
-### 4e. check_dependency_pins.py
-
-> **Config**: PostToolUse, matcher=`Edit|Write`, statusMessage: "Checking dependency pins..."
->
-> **Observe via**: BLOCKED (exit 2) or STATUS
-
-#### Positive tests (should BLOCK)
-
-- [ ] Edit `pyproject.toml` to add bare `"requests"` (no version pin) -- BLOCKED
-
-#### Positive tests (should PASS)
-
-- [ ] Edit `pyproject.toml` with `"requests==2.32.3"` (pinned) -- allowed, STATUS flashes
-
-#### Negative tests
-
-- [ ] Edit a `.py` file -- hook fires, exits 0 immediately
+```bash
+# Clean up staged secret test file:
+git reset HEAD src/staged_secret_test.py 2>/dev/null
+rm -f src/staged_secret_test.py
+./scripts/observe.sh --reset
+```
 
 ---
 
-### 4f. check_random_seeds.py
+## Batch 3: Read tool tests (~3 min)
 
-> **Config**: PostToolUse, matcher=`Edit|Write`, statusMessage: "Checking random seeds..."
->
-> **Observe via**: MODEL-ONLY (stdout) + STATUS
+Phrase as: "read the file `<path>`"
 
-#### Positive tests
+### block_read_env.py — Read matcher
 
-- [ ] Edit `src/unseeded_random.py` -- Claude mentions seed warning in response
+> **Wiring**: PreToolUse, matcher=Read, no `if:`.
+> **Observe via**: BLOCKED (exit 2). Note: Read matcher blocks show only a red dot
+> in the UI (stderr not rendered). The block itself works — Claude reports it as a tool error.
 
-#### Negative tests
+**Should BLOCK:**
 
-- [ ] Edit a `.py` file that does not use `random` or `numpy` -- no warning
-- [ ] Edit a `test_*.py` file -- hook skipped
+- [ ] 3.1: read the file `.env` — BLOCKED (red dot, tool error) → `./scripts/observe.sh block_read_env`
+- [ ] 3.2: read the file `.env.local` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [ ] 3.3: read the file `.env.production` — BLOCKED → `./scripts/observe.sh block_read_env`
 
----
+**Should ALLOW:**
 
-### 4g. block_suppressions.py
+- [ ] 3.4: read the file `.env.example` — allowed (contents shown) → `./scripts/observe.sh block_read_env`
+- [ ] 3.5: read the file `src/clean_module.py` — allowed → `./scripts/observe.sh block_read_env`
 
-> **Config**: PostToolUse, matcher=`Edit|Write`, statusMessage: "Checking for suppression comments..."
->
-> **Observe via**: BLOCKED (exit 2) or STATUS
-
-#### Positive tests (should BLOCK)
-
-- [ ] Add `# type: ignore` (no justification) to a `.py` file -- BLOCKED
-- [ ] Add `# noqa: C901` to a `.py` file -- BLOCKED
-- [ ] Add `# TYPE: IGNORE` (uppercase) -- BLOCKED (case-insensitive check)
-
-#### Positive tests (should PASS)
-
-- [ ] Add `# type: ignore[override]  # mypy-bug: reason` (justified) -- allowed
-- [ ] Add `# noqa: E402` (pre-approved code) -- allowed
-
-#### Negative tests
-
-- [ ] Edit a `.txt` file with `# type: ignore` -- allowed (not a Python file)
-- [ ] Edit a file inside `.venv/` with `# type: ignore` -- allowed (excluded path)
+```bash
+./scripts/observe.sh --reset
+```
 
 ---
 
-### 4h. bandit_check.sh
+## Batch 4: pip_audit two-phase flow (~10 min)
 
-> **Config**: PostToolUse, matcher=`Edit|Write`, statusMessage: "Security scanning..."
->
-> **Observe via**: MODEL-ONLY (stdout) + STATUS
+**Order matters**: pip_audit_check (PostToolUse) must create the state file before
+pip_audit_guard (PreToolUse) can read it. Network-dependent — may be slow.
 
-#### Positive tests
+### Step 1 — pip_audit_check creates state
 
-- [ ] Edit `src/security_issues.py` (contains `eval()`, `subprocess.call(shell=True)`) -- Claude mentions security findings in response
+> **Wiring**: PostToolUse, matcher=Bash, no `if:`.
+> **Observe via**: STATE-FILE at `.hook_state/pip_audit/report.json`.
+> Fires on every Bash command; internally filters for `uv add`/`uv sync`/`uv pip install`.
 
-#### Negative tests
+- [ ] 4.1: run `uv add httpx` — state file created → `./scripts/observe.sh pip_audit_check` then `cat .hook_state/pip_audit/report.json`
+- [ ] 4.2: run `uv sync` — state file updated → `./scripts/observe.sh pip_audit_check`
+- [ ] 4.3: run `git status` — hook fires but exits immediately (not a uv command) → `./scripts/observe.sh pip_audit_check`
 
-- [ ] Edit a `.txt` file -- hook skipped
-- [ ] Edit a clean `.py` file with no security issues -- no findings reported
+### Step 2 — pip_audit_guard reads state and blocks
 
----
+> **Wiring**: PreToolUse, matcher=Bash, no `if:`.
+> **Observe via**: BLOCKED (exit 2) when state file has vulns; silent exit 0 otherwise.
 
-## 5. PostToolUse Write-Only Hook
+- [ ] 4.4: run `uv add requests` — BLOCKED if vulns in state file, else allowed → `./scripts/observe.sh pip_audit_guard`
+- [ ] 4.5: run `git status` — guard fires but exits 0 (not a uv command) → `./scripts/observe.sh pip_audit_guard`
 
-### 5a. check_test_pair.py
+### Step 3 — clean audit clears state
 
-> **Config**: PostToolUse, matcher=`Write`, statusMessage: "Checking for test file..."
->
-> **Observe via**: MODEL-ONLY (stdout) + STATUS
+- [ ] 4.6: run `uv sync` — if no vulns, state file cleared → `ls -la .hook_state/pip_audit/report.json`
+- [ ] 4.7: run `uv add requests` — allowed (no state file = no block) → `./scripts/observe.sh pip_audit_guard`
 
-#### Positive tests
+### Step 4 — negative: no state file at all
 
-- [ ] Ask Claude to CREATE (Write) a new file `src/no_test_pair.py` -- "TDD reminder" appears in Claude's response
+```bash
+# Run in normal terminal:
+rm -f .hook_state/pip_audit/report.json
+```
 
-#### Negative tests (KEY TESTS for matcher distinction)
+- [ ] 4.8: run `uv add httpx` — pip_audit_guard exits 0 (no state file) → `./scripts/observe.sh pip_audit_guard`
 
-- [ ] Ask Claude to EDIT an existing `.py` file -- "Checking for test file..." STATUS does NOT appear (Edit does not match Write-only matcher)
-- [ ] Write a `test_*.py` file -- hook skipped (test files excluded)
-- [ ] Write an `__init__.py` file -- hook skipped
-- [ ] Write a `.txt` file -- hook skipped
-
-#### Effectiveness test
-
-- [ ] After receiving a TDD reminder, does Claude actually mention testing or offer to write tests?
-
----
-
-## 6. PostToolUse WebFetch|mcp__.* Hook
-
-### 6a. scan_prompt_injection.py
-
-> **Config**: PostToolUse, matcher=`WebFetch|mcp__.*`, statusMessage: "Scanning for prompt injection..."
->
-> **Observe via**: MODEL-ONLY (stdout JSON) + STATUS
-
-#### Positive tests
-
-- [ ] Fetch a URL whose content contains "ignore all previous instructions" -- Claude acknowledges injection risk in response
-- [ ] MCP tool returns text containing prompt injection patterns -- warning appears
-
-#### Negative tests
-
-- [ ] Edit a `.py` file -- wrong matcher, hook skipped entirely
-- [ ] Fetch a clean webpage with no injection patterns -- no warnings
-
-#### Notes
-
-Always exits 0 -- informational only, never blocks.
+```bash
+./scripts/observe.sh --reset
+```
 
 ---
 
-## 7. Stop Hook
+## Batch 5: PreToolUse Edit|Write blockers (~5 min)
 
-### 7a. ruff_lint.sh
+These hooks were promoted from PostToolUse to PreToolUse in the channel redesign.
+exit 2 **genuinely prevents** the edit (unlike PostToolUse exit 2, which is cosmetic).
 
-> **Config**: Stop, no matcher, statusMessage: "Lint-fixing changed Python files..."
->
-> **Observe via**: SIDE-EFFECT (files modified) + STATUS
+Phrase as: "edit `<file>` to `<change>`" or "add `<content>` to `<file>`"
 
-#### Positive tests
+### check_dependency_pins.py (Strategy A)
 
-- [ ] Edit a `.py` file with lint issues (e.g., unused import), let the turn complete -- file is auto-fixed after turn ends; confirm with `git diff`
-- [ ] Edit a `.py` file that already passes lint (no issues) -- no side effects, file is unchanged; confirm with `git diff` showing no changes
+> **Wiring**: PreToolUse, matcher=Edit|Write, no `if:`.
+> **Observe via**: BLOCKED (exit 2, stderr visible) — edit prevented, file unchanged.
 
-#### Negative tests
+- [ ] 5.1: edit `pyproject.toml` to add `"requests"` as a dependency (no version pin) — BLOCKED, file unchanged → `./scripts/observe.sh check_dependency_pins` then `git diff pyproject.toml`
+- [ ] 5.2: edit `pyproject.toml` to add `"requests==2.32.3"` as a dependency — allowed → `./scripts/observe.sh check_dependency_pins`
+- [ ] 5.3: add a comment to `src/clean_module.py` — hook fires, exits 0 (not a dep file) → `./scripts/observe.sh check_dependency_pins`
 
-- [ ] Complete a turn without editing any `.py` files -- nothing to fix, no side effects
-- [ ] Edit a non-`.py` file with lint-like issues (e.g., `example.txt` containing unused variables) -- ruff_lint should not modify it; confirm file is unchanged
+### block_suppressions.py (Strategy A)
 
-#### Known limitation
+> **Wiring**: PreToolUse, matcher=Edit|Write, no `if:`.
+> **Observe via**: BLOCKED (exit 2, stderr visible) — edit prevented.
 
-File paths with spaces break `xargs` in this hook.
+- [ ] 5.4: add `x = 1  # type: ignore` to `src/clean_module.py` — BLOCKED, line never written → `./scripts/observe.sh block_suppressions` then `git diff`
+- [ ] 5.5: add `x = 1  # type: ignore[override]  # mypy-bug: reason` to `src/clean_module.py` — allowed → `./scripts/observe.sh block_suppressions`
 
----
+### block_glob_deny_rules.py (Strategy A — file reconstruction)
 
-## 8. Cross-Cutting Wiring Tests
+> **Wiring**: PreToolUse, matcher=Edit|Write, no `if:`.
+> **Observe via**: BLOCKED (exit 2, stderr visible) — edit prevented.
+> Uses file reconstruction: reads current file, applies proposed edit in memory, checks result.
 
-These test interactions between multiple hooks and matcher behavior.
+- [ ] 5.6: edit `.claude/settings.json` to add `Read(**/.env)` in a deny rule — BLOCKED → `./scripts/observe.sh block_glob_deny_rules`
+- [ ] 5.7: edit `.claude/settings.json` to add `Read(.env)` (specific, not glob) — allowed → `./scripts/observe.sh block_glob_deny_rules`
 
-### Edit|Write matcher coverage
+> **Important**: Restore settings.json after test 5.7 if Claude modified it.
 
-> Verify that Edit fires all 8 Edit|Write hooks, and Write fires all 8 + check_test_pair.
-
-- [ ] Ask Claude to EDIT a `.py` file -- observe STATUS messages for all 8 Edit|Write hooks. Confirm "Checking for test file..." does NOT appear.
-- [ ] Ask Claude to WRITE (create) a new `.py` file -- observe STATUS messages for all 8 Edit|Write hooks PLUS "Checking for test file..." from check_test_pair.
-
-### Step 0c Experiments (fold in here)
-
-> These resolve three open questions from the plan (lines 170-176 of `plans/hook_test_harness_plan.md`).
-> Record answers back into the Step 0c section of the plan after running.
-
-**Experiment A** (answers Q1: execution order + Q2: blocking cascade):
-
-- [ ] Edit a Python file containing both `# type: ignore` (triggers `block_suppressions`, exit 2) AND bad formatting (triggers `ruff_format`). In settings.json, `ruff_format.sh` comes before `block_suppressions.py`. Record: Does the file get reformatted? Does block_suppressions still block?
-- [ ] Swap the order in settings.json (block_suppressions first). Repeat. Does ruff_format still run after the block?
-
-**Experiment B** (answers Q3: side-effect visibility):
-
-- [ ] Edit a Python file with a type error on a line that ruff would reformat. After the edit, check: did pyright report the error on the original line number or the reformatted line number?
-
-### Blocking cascade
-
-> When one hook blocks, do subsequent hooks in the same event still fire?
-
-- [ ] Edit a `.py` file that triggers `block_suppressions` (exit 2) -- Record: Did `ruff_format` still run? Did `pyright` still run?
-
-### PreToolUse Bash: multiple hooks, one matcher
-
-> Multiple PreToolUse hooks share matcher=Bash. Test which ones fire.
-
-- [ ] "pip install requests" -- `block_bare_pip` blocks. Do `scan_secrets_on_commit` and `block_git_add_env` also fire? (They have if: conditions that don't match, so they should fire but exit 0.)
-- [ ] "git add .env" -- `block_git_add_env` blocks. Does `block_bare_pip` also fire? (It has no if:, so it fires on all Bash commands.)
+```bash
+./scripts/observe.sh --reset
+```
 
 ---
 
-## Available Fixture Files
+## Batch 6: PostToolUse inline injection (~15 min)
 
-These files exist in the project for use during testing:
+Strategy B hooks fire after an Edit/Write completes and inject `# HOOK:<NAME>: <msg>`
+comments at relevant lines. Comments are self-cleaning (stale ones removed each run).
+
+**Parallel execution**: All PostToolUse Edit|Write hooks run in parallel with
+`fcntl.flock` serializing the read-modify-write phase.
+
+**After each edit, check the file for `# HOOK:` comments.**
+
+### ruff_format.sh
+
+> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
+> **Observe via**: SIDE-EFFECT (file reformatted on disk).
+
+- [ ] 6.1: edit `src/clean_module.py` and add a function with bad formatting: `def    messy(  x,y  ) :  return   x+y` — file reformatted by ruff → `git diff src/clean_module.py`
+- [ ] 6.2: edit `fixtures/sample_r_file.R` and add a comment — no formatting applied → `git diff fixtures/sample_r_file.R`
+
+### pyright_check.sh
+
+> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
+> **Observe via**: INLINE — `# HOOK:PYRIGHT: <error>` comments.
+
+- [ ] 6.3: edit `src/type_errors.py` — add a blank line at the end → `./scripts/observe.sh pyright_check src/type_errors.py` — `# HOOK:PYRIGHT:` comments at type error lines
+- [ ] 6.4: edit `src/clean_module.py` — add a blank line → `./scripts/observe.sh pyright_check src/clean_module.py` — no `# HOOK:PYRIGHT:` comments
+- [ ] 6.5: edit `fixtures/sample_r_file.R` — add a line → `./scripts/observe.sh pyright_check fixtures/sample_r_file.R` — hook skips
+- [ ] 6.6: **Visibility test** (after 6.3): Does Claude mention pyright findings in its response? (It should — it reads back the file and sees the comments)
+
+### check_docstrings.py
+
+> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
+> **Observe via**: INLINE — `# HOOK:DOCSTRING: <msg>` comments.
+
+- [ ] 6.7: edit `src/missing_docstrings.py` — add a blank line → `./scripts/observe.sh check_docstrings src/missing_docstrings.py` — `# HOOK:DOCSTRING:` at undocumented functions
+- [ ] 6.8: edit any `test_*.py` file — add a blank line → `./scripts/observe.sh check_docstrings` — hook skips (test files excluded)
+
+### check_random_seeds.py
+
+> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
+> **Observe via**: INLINE — `# HOOK:SEED: <msg>` comments.
+
+- [ ] 6.9: edit `src/unseeded_random.py` — add a blank line → `./scripts/observe.sh check_random_seeds src/unseeded_random.py` — `# HOOK:SEED:` at unseeded usage
+- [ ] 6.10: edit `src/clean_module.py` — add a blank line → `./scripts/observe.sh check_random_seeds src/clean_module.py` — no seed comments
+
+### bandit_check.sh
+
+> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
+> **Observe via**: INLINE — `# HOOK:BANDIT: <finding>` comments.
+
+- [ ] 6.11: edit `src/security_issues.py` — add a blank line → `./scripts/observe.sh bandit_check src/security_issues.py` — `# HOOK:BANDIT:` at security issues
+- [ ] 6.12: edit `src/clean_module.py` — add a blank line → `./scripts/observe.sh bandit_check src/clean_module.py` — no bandit comments
+
+### semgrep_check.sh
+
+> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
+> **Observe via**: INLINE — `# HOOK:SEMGREP: <finding>` comments.
+
+- [ ] 6.13: edit `src/security_issues.py` — add a blank line → `./scripts/observe.sh semgrep_check src/security_issues.py` — `# HOOK:SEMGREP:` at security issues
+- [ ] 6.14: edit a `.txt` file → `./scripts/observe.sh semgrep_check` — hook skips
+
+### Integration: multiple injection hooks + parallel execution
+
+> Verify file locking prevents lost writes when multiple hooks inject into the same file.
+
+- [ ] 6.15: edit `src/multi_trigger.py` — add a blank line → `./scripts/observe.sh --all src/multi_trigger.py`
+  - MULTIPLE `# HOOK:` comments appear: PYRIGHT, BANDIT, DOCSTRING, SEED, possibly SEMGREP
+  - No lost writes (all expected hooks produced output)
+- [ ] 6.16: check debug log for overlapping timestamps (parallel execution) → `grep -E 'pyright|bandit|docstring|random_seeds|semgrep|ruff_format' /tmp/hook_debug.log | tail -20`
+- [ ] 6.17: edit `src/multi_trigger.py` again — add another blank line → `./scripts/observe.sh --all src/multi_trigger.py`
+  - Stale `# HOOK:` comments cleaned up, fresh ones injected
+
+```bash
+./scripts/observe.sh --reset
+```
+
+---
+
+## Batch 7: Cross-cutting — PreToolUse blocks PostToolUse (~2 min)
+
+When a PreToolUse Edit|Write hook blocks (exit 2), the edit never happens, so
+PostToolUse Edit|Write hooks have nothing to process.
+
+- [ ] 7.1: edit `src/clean_module.py` and add a line `x = 1  # type: ignore` → `./scripts/observe.sh --all src/clean_module.py`
+  - block_suppressions (PreToolUse) BLOCKS
+  - ruff_format did NOT run
+  - pyright_check did NOT run
+  - No `# HOOK:` comments appear (file was never modified)
+  - `git diff` shows file unchanged
+
+```bash
+./scripts/observe.sh --reset
+```
+
+---
+
+## Batch 8: Miscellaneous (~10 min)
+
+### scan_prompt_injection.py
+
+> **Wiring**: PostToolUse, matcher=WebFetch|mcp__.*, no `if:`.
+> **Observe via**: MODEL-CONTEXT — output reaches Claude as `<system-reminder>`.
+> Hook must include `hookEventName` field (undocumented requirement discovered during probes).
+
+> **Setup** (if test 8.1 needs a local server for injection content):
+> ```bash
+> # In another terminal:
+> cd ~/projects/hook_tests/fixtures && python3 -m http.server 8888 &
+> ```
+> Then ask Claude to fetch `http://localhost:8888/injection_payload.txt`
+
+- [ ] 8.1: fetch a URL with injection content (e.g., `http://localhost:8888/injection_payload.txt`) — Claude acknowledges injection risk → `./scripts/observe.sh scan_prompt_injection`
+- [ ] 8.2: fetch a clean URL (e.g., `https://httpbin.org/get`) — no injection warning → `./scripts/observe.sh scan_prompt_injection`
+- [ ] 8.3: edit a `.py` file — hook does NOT fire (wrong matcher) → `./scripts/observe.sh scan_prompt_injection`
+
+### ruff_lint.sh — Stop hook
+
+> **Wiring**: Stop, no matcher.
+> **Observe via**: SIDE-EFFECT (files auto-fixed after turn ends).
+
+- [ ] 8.4: edit `src/clean_module.py` and add `import os` at the top (unused import), let the turn complete — after Claude finishes, unused import auto-removed → `git diff src/clean_module.py`
+- [ ] 8.5: edit `src/clean_module.py` (already clean) — add a docstring tweak — no side effects → `git diff src/clean_module.py`
+- [ ] 8.6: ask Claude a question (no file edits) — nothing happens → `./scripts/observe.sh ruff_lint`
+- [ ] 8.7: edit `fixtures/sample_r_file.R` — add a comment — ruff_lint does not touch non-.py files → `git diff fixtures/sample_r_file.R`
+
+---
+
+## Cleanup
+
+Run in your normal terminal after all testing:
+
+```bash
+# Restore any modified files
+git checkout -- src/ fixtures/ pyproject.toml 2>/dev/null
+
+# Remove test artifacts
+git reset HEAD src/staged_secret_test.py 2>/dev/null
+rm -f src/staged_secret_test.py
+rm -f src/*.hook_lock
+rm -f .env.local .env.production  # if created during prep
+
+# Restore normal state
+touch .last_dep_check
+
+echo "Testing complete — review checkboxes above for results."
+```
+
+---
+
+## Fixture Files Reference
 
 **Source files** (`src/`):
-- `type_errors.py` -- contains deliberate type errors for pyright
-- `missing_docstrings.py` -- functions without docstrings
-- `security_issues.py` -- eval(), subprocess.call(shell=True)
-- `unseeded_random.py` -- random/numpy usage without seeds
-- `has_suppressions.py` -- type: ignore, noqa comments
-- `no_test_pair.py` -- source file with no corresponding test
-- `clean_module.py` -- clean file that should pass all hooks
+- `type_errors.py` — deliberate type errors for pyright
+- `missing_docstrings.py` — functions without docstrings
+- `security_issues.py` — eval(), subprocess.call(shell=True)
+- `unseeded_random.py` — random/numpy usage without seeds
+- `has_suppressions.py` — type: ignore, noqa comments
+- `clean_module.py` — clean file that should pass all hooks
+- `multi_trigger.py` — triggers pyright, bandit, semgrep, docstrings, random seeds simultaneously
 
 **Fixture files** (`fixtures/`):
-- `staged_secret.py` -- contains fake API key for secret scanning
-- `glob_deny_settings.json` -- settings with dangerous glob patterns
-- `injection_payload.txt` -- prompt injection text samples
-- `unpinned_requirements.txt` -- dependencies without version pins
-- `sample_r_file.R` -- non-Python file for negative tests
+- `staged_secret.py` — contains fake API key for secret scanning
+- `glob_deny_settings.json` — settings with dangerous glob patterns
+- `injection_payload.txt` — prompt injection text samples
+- `unpinned_requirements.txt` — dependencies without version pins
+
+**State directories** (gitignored):
+- `.hook_state/pip_audit/` — pip_audit_check findings
+
+---
+
+## Follow-up: Secret Detection False Positives
+
+The `scan_secrets_on_commit` hook fires on patterns like `sk-ant-FAKE-...` in
+documentation and test fixtures, even though these are clearly not real secrets.
+This came up while committing this very file — the Batch 0 prep instructions
+contained a dummy key string that triggered the hook.
+
+**After completing the TESTING.md playbook**, revisit the secret detection regex
+to determine whether it can be tightened without introducing false negatives.
+Possible approaches:
+- Minimum entropy or length threshold (real keys have high randomness)
+- Allowlist for paths like `TESTING.md`, `fixtures/`, `prompts/`
+- Require a minimum number of non-repeating characters after the prefix
+- Context-aware scanning (skip strings inside markdown code fences or comments
+  that contain "FAKE", "TEST", "EXAMPLE", "PLACEHOLDER")

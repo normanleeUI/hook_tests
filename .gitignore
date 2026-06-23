@@ -1,4 +1,6 @@
 .env
+.env.local
+fixtures/.env.local
 .venv/
 venv/
 __pycache__/

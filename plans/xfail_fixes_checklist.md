@@ -56,46 +56,13 @@ adversarial tests now pass without any xfails.
 
 ---
 
-## Category 3: Logic limitations (design decisions needed)
+## Category 3: Logic limitations — DONE
 
-These require judgment calls about how far to push the hook's capabilities.
-Discuss approach before implementing.
-
-### check_random_seeds.py (`~/.claude/hooks/check_random_seeds.py`)
-
-- [ ] **Cannot distinguish code from comments** (1 xfail: `test_tier2_hooks.py:570`)
-  - Bug: `# np.random.seed(42)  -- disabled` is treated as a real seed call
-  - Fix options: (a) skip lines starting with `#` before regex matching, (b) use a simple comment-stripping pass, (c) use `ast.parse` for Python files
-  - Tests: `test_commented_seed_should_still_warn` (2 parametrized comment patterns). Test expects the hook to STILL inject `# HOOK:SEED:` warning (commented seed doesn't count as real seeding)
-
-- [ ] **Cannot distinguish code from strings** (1 xfail: `test_tier2_hooks.py:586`)
-  - Bug: `s = "np.random.seed(42)"` in a string literal is treated as a real seed call
-  - Fix options: same as above — `ast.parse` would handle both comments and strings
-  - Tests: `test_string_seed_should_still_warn` (2 parametrized string patterns). Same expectation: string seed doesn't count.
-
-### scan_prompt_injection.py (`~/.claude/hooks/scan_prompt_injection.py`)
-
-- [ ] **Missed injection phrases** (1 xfail: `test_prompt_injection.py:417`)
-  - Bug: regex requires verb adjacent to adjective — misses "IGNORE YOUR PRIOR INSTRUCTIONS", "disregard the above guidelines", "forget your existing directives"
-  - Fix: allow intervening words between verb and target in the override pattern
-  - Tests: `test_injection_phrase_missed_by_hook` (3 parametrized phrases)
-
-- [ ] **False positives on benign phrases** (1 xfail: `test_prompt_injection.py:440`)
-  - Bug: "you are now" / "from now on you are" regex is too broad — matches "You are now looking at the test results" and "from now on you are going to see better performance"
-  - Fix: tighten the identity manipulation regex to require role-assignment language after "you are now" (e.g., "you are now a", "you are now my", "you are now an")
-  - Tests: `test_benign_phrase_false_positive` (2 parametrized benign phrases). Expects exit 0 with empty stdout.
-
-- [ ] **Override synonym verbs not covered** (1 xfail: `test_intent_gaps.py:734`)
-  - Bug: verb regex only matches `ignore|disregard|forget|override|bypass|skip|do not follow`
-  - Missing verbs: "stop following", "throw away", "abandon", "delete", "reset", "drop"
-  - Fix: add these to the verb alternation
-  - Tests: `test_override_synonym_verbs_not_in_regex` (hypothesis, 50 examples: 6 verbs x 5 targets x 4 nouns)
-
-- [ ] **Override synonym targets not covered** (1 xfail: `test_intent_gaps.py:757`)
-  - Bug: target regex only matches `previous|prior|above|earlier|existing|your|the|system`
-  - Missing targets: "original", "old", "initial", "first", "default"
-  - Fix: add these to the target alternation
-  - Tests: `test_override_synonym_targets_not_in_regex` (hypothesis, 50 examples: 4 verbs x 5 targets x 4 nouns)
+- [x] **check_random_seeds.py: code vs comments/strings** — replaced regex with `ast.parse` for seed detection; falls back to regex on syntax errors
+- [x] **scan_prompt_injection.py: missed injection phrases** — added optional `(?:your|the)` between verb and adjective
+- [x] **scan_prompt_injection.py: false positives** — added negative lookaheads for common benign verb continuations
+- [x] **scan_prompt_injection.py: synonym verbs** — added stop following, throw away, abandon, delete, reset, drop
+- [x] **scan_prompt_injection.py: synonym targets** — added original, old, initial, first, default
 
 ---
 
@@ -105,10 +72,10 @@ Discuss approach before implementing.
 |----------|--------|-----------------|
 | 1. Input validation | **DONE** | ~92 dynamic + 2 static |
 | 2. Regex bugs | **DONE** | 16 static |
-| 3. Logic limitations | TODO | 9 remaining (4 seed + 5 injection) |
+| 3. Logic limitations | **DONE** | 9 static |
 
-**Current suite**: 913 passed, 9 xfailed, 0 failures
+**Final suite**: 922 passed, 0 xfailed, 0 failures
 
 ### Sessions log
 
-- 2026-06-22: Categories 1+2 completed via parallel agents. All 10 hooks hardened, all regex bugs fixed, adversarial test infrastructure cleaned up. 9 Category 3 xfails remain (design decisions needed).
+- 2026-06-22: All three categories completed via parallel agents. All 10 hooks hardened, all regex bugs fixed, adversarial test infrastructure cleaned up, ast-based seed detection added, prompt injection regex expanded and tightened. Zero xfails remain.

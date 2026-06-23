@@ -414,10 +414,6 @@ class TestInjectionBoundaryDetection:
         )
 
     @pytest.mark.parametrize("phrase", SHOULD_DETECT_BUT_MISSED)
-    @pytest.mark.xfail(
-        reason="hook limitation: regex requires verb adjacent to adjective, no intervening words",
-        strict=True,
-    )
     def test_injection_phrase_missed_by_hook(self, phrase: str) -> None:
         """These injection phrases should be detected per spec but the hook's regex misses them."""
         padded = self._pad(phrase)
@@ -437,10 +433,6 @@ class TestInjectionBoundaryDetection:
         assert stdout.strip() == "", f"Hook false-positive on benign phrase: {phrase!r}"
 
     @pytest.mark.parametrize("phrase", FALSE_POSITIVE_BENIGN)
-    @pytest.mark.xfail(
-        reason="hook limitation: 'you are now' / 'from now on you are' regex is too broad",
-        strict=True,
-    )
     def test_benign_phrase_false_positive(self, phrase: str) -> None:
         """These benign phrases trigger false positives due to overly broad regex."""
         padded = self._pad(phrase)

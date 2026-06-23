@@ -567,10 +567,6 @@ class TestSeedDetectionContext:
         assert "# HOOK:SEED:" not in f.read_text()
 
     @pytest.mark.parametrize("seed_line", SEED_IN_COMMENT)
-    @pytest.mark.xfail(
-        reason="hook bug: regex cannot distinguish code from comments",
-        strict=True,
-    )
     def test_commented_seed_should_still_warn(
         self, tmp_path: Path, seed_line: str
     ) -> None:
@@ -583,10 +579,6 @@ class TestSeedDetectionContext:
         assert "# HOOK:SEED:" in f.read_text()
 
     @pytest.mark.parametrize("seed_line", SEED_IN_STRING)
-    @pytest.mark.xfail(
-        reason="hook bug: regex cannot distinguish code from comments/strings",
-        strict=True,
-    )
     def test_string_seed_should_still_warn(
         self, tmp_path: Path, seed_line: str
     ) -> None:

@@ -17,7 +17,6 @@ hypothesis sweeps.
 import json
 from pathlib import Path
 
-import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -723,10 +722,6 @@ class TestScanPromptInjectionIntentGaps:
     # These probe whether the hook's intent (catch instruction overrides)
     # extends beyond the specific words in its compiled patterns.
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: override verb regex only matches ignore|disregard|forget|override|bypass|skip|do not follow",
-    )
     @given(
         verb=st.sampled_from(
             ["stop following", "throw away", "abandon", "delete", "reset", "drop"]
@@ -746,10 +741,6 @@ class TestScanPromptInjectionIntentGaps:
             f"synonym verb '{verb}' was not detected"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: override target regex only matches previous|prior|above|earlier|existing|your|the|system",
-    )
     @given(
         verb=st.sampled_from(["ignore", "disregard", "forget", "override"]),
         target=st.sampled_from(["original", "old", "initial", "first", "default"]),

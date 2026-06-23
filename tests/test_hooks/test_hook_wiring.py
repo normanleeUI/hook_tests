@@ -130,6 +130,12 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Edit|Write",
         "if_condition": None,
     },
+    "semgrep_check.sh": {
+        "event": "PostToolUse",
+        "interpreter": "bash",
+        "matcher": "Edit|Write",
+        "if_condition": None,
+    },
     # PostToolUse -- Bash group
     "pip_audit_check.py": {
         "event": "PostToolUse",

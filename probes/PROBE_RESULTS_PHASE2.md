@@ -77,3 +77,74 @@ Recorded during manual testing of P9–P13 probes (channel redesign Step 1).
 - **Subsequent hooks see prior modifications**: YES — ruff_format modified the file on disk (reformatted spacing and quotes), and the file persisted with those changes. When Claude re-read the file after the block, it saw ruff's reformatted version (`print("hello")` not `print(    'hello'    )`), confirming the file was modified between hooks.
 - AC-PRB-09 CONFIRMED: Hooks operate on the actual file on disk, not on a snapshot. Each hook sees all prior hooks' file modifications.
 - Note: This was inferred from the ruff_format → file state chain rather than the original plan's pyright line-number test, but the evidence is equally conclusive — the file on disk was demonstrably changed by ruff_format and subsequent reads reflected those changes.
+
+## Addendum (2026-06-22): Experiments A/B conclusions partially wrong — hooks run in parallel
+
+### What we got wrong
+
+AC-PRB-08 ("PostToolUse hooks run sequentially") was overstated. The evidence
+showed ruff_format's output was visible when later hooks read the file, but
+this is equally consistent with **parallel execution where a fast hook finishes
+before slower hooks reach their read phase**. The probe did not test with two
+slow hooks that would expose a race condition.
+
+### How we discovered it
+
+During manual testing of bandit_check.sh (Strategy B inline injection), the
+`# HOOK:BANDIT:` comment was consistently missing from edited files even though
+`# HOOK:PYRIGHT:` appeared. Debug logging in `inject_tool_findings.py` revealed:
+
+1. Both pyright and bandit fired, both found findings, both wrote to the file.
+2. Both read the **original** file (without each other's comments) — proving
+   they started before either had written.
+3. The last writer won: pyright (slower due to nodeenv startup) overwrote
+   bandit's changes, or vice versa depending on timing.
+
+This is a classic read-modify-write race condition that only manifests when two
+hooks take comparable time — explaining why ruff_format (sub-50ms) appeared
+sequential in the original probe.
+
+### Corrected conclusions
+
+- **AC-PRB-08 REVISED**: PostToolUse hooks in the same group run **in parallel**,
+  not sequentially. All hooks receive the same event payload on stdin, but they
+  execute as concurrent subprocesses.
+- **AC-PRB-09 STANDS (with caveat)**: Hooks operate on the real file on disk,
+  not a snapshot. But because hooks run in parallel, a hook only sees prior
+  modifications if the writing hook happened to finish first — there is no
+  ordering guarantee.
+- The observed "execution order" (line 73 above) likely reflects log-write
+  timing, not a causal sequence.
+
+### Fix applied
+
+Added `fcntl.flock`-based file locking to all PostToolUse Edit|Write hooks
+that write to the edited file:
+
+| Hook | Locking mechanism |
+|---|---|
+| `ruff_format.sh` | `flock "$f.hook_lock"` (bash) |
+| `pyright_check.sh` | `fcntl.flock` in `inject_tool_findings.py` |
+| `check_docstrings.py` | `fcntl.flock` in `hook_inject.read_clean_write()` |
+| `check_random_seeds.py` | `fcntl.flock` in `hook_inject.read_clean_write()` |
+| `bandit_check.sh` | `fcntl.flock` in `inject_tool_findings.py` |
+
+All use the same lock file (`<filepath>.hook_lock`), so writes serialize
+correctly across hooks regardless of execution order. The lock is held only
+during the read-modify-write phase — slow operations (running pyright, bandit)
+happen outside the lock.
+
+No other hook groups are affected: PreToolUse hooks don't modify files, and the
+PostToolUse Bash hook (`pip_audit_check.py`) writes to `.hook_state/`, not to
+the edited file.
+
+### Additional discovery: `if` field does not support `|` OR syntax
+
+During the same debugging session, we found that the `if` field in hook
+configuration does not support `|` as an OR separator (unlike `matcher`).
+The pattern `"if": "Bash(*uv add*)|Bash(*uv sync*)|Bash(*uv pip install*)"`
+was treated as a single literal pattern and matched nothing. Both
+`pip_audit_guard.py` and `pip_audit_check.py` were silently never firing.
+
+Fix: removed the `if` field entirely. Both hooks already have internal
+command matching that handles the filtering correctly.

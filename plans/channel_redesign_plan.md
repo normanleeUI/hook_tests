@@ -1461,19 +1461,14 @@ Remove `check_test_pair.py` from settings.json PostToolUse Write matcher hooks a
 
 ---
 
-## Addendum A: Pyright Venv Discovery (Fix Required)
+## Addendum A: Pyright Venv Discovery ~~(Fix Required)~~ RESOLVED (2026-06-22)
 
 **Problem**: `inject_tool_findings.py` runs `uvx pyright` on a temp file in `/tmp/`. Because the file is outside the project directory, pyright cannot resolve third-party imports (no venv, no `pyrightconfig.json`). This causes false-positive `reportMissingImports` findings injected as `# HOOK:PYRIGHT:` artifacts into every project file that imports non-stdlib packages. Even running pyright in-project fails without explicit `[tool.pyright]` config pointing to the venv — this is a fundamental gap with global hooks that invoke tools needing per-project context.
 
-**Stopgap (2026-06-21)**: `_parse_pyright` in `inject_tool_findings.py` filters out `reportMissingImports` findings. Real type errors (`reportArgumentType`, `reportAssignmentType`, etc.) are still injected. This filter must be reverted once venv discovery is implemented.
+**Fix implemented (2026-06-22)**: Option 1 — auto-discover venv. `_find_venv_python()` walks up from the original file to find `.venv/bin/python` and passes `--pythonpath <path>` to pyright via an `extra_args` callback in `TOOL_CONFIGS["PYRIGHT"]`. The `reportMissingImports` stopgap filter has been removed from `_parse_pyright`. When no venv is found, pyright runs without `--pythonpath` (graceful degradation — unresolvable imports produce warnings, not errors).
 
-**Fix options** (implement one, then revert the stopgap filter):
-1. **Auto-discover venv**: walk up from the original file looking for `.venv/`, pass `--pythonpath .venv/bin/python` to pyright
-2. **Only run if pyright configured**: skip injection unless the project has `pyrightconfig.json` or `[tool.pyright]` in `pyproject.toml` (mirrors the existing mypy-skip logic, but inverted)
-3. **Create temp file in project dir**: `tempfile.mkstemp(suffix=".py", dir=path.parent)` so pyright inherits project config discovery — only works if option 1 or 2 also provides venv path
+**Scope**: only pyright is affected among current hooks. Bandit does AST-level pattern matching and doesn't need import resolution. Ruff runs on the original file path (no temp file). Semgrep is also unaffected (pattern matching, not import resolution).
 
-**Scope**: only pyright is affected among current hooks. Bandit does AST-level pattern matching and doesn't need import resolution. Ruff runs on the original file path (no temp file). A future semgrep hook would also be unaffected (pattern matching, not import resolution).
+## Addendum B: Global Semgrep Hook ~~(Future Work)~~ RESOLVED (2026-06-22)
 
-## Addendum B: Global Semgrep Hook (Future Work)
-
-Create a global Semgrep hook in `~/.claude/settings.json` (analogous to the existing `bandit_check.sh` hook) using the `/hook` skill. This would run Semgrep automatically on PostToolUse Edit/Write for `.py` files, complementing Bandit's Python-specific security checks with Semgrep's broader pattern-matching capabilities. Currently, Semgrep is only available as an on-demand MCP server in `example-lib` — a global hook would provide consistent coverage across all projects.
+Global `semgrep_check.sh` hook implemented and wired as PostToolUse Edit|Write. Uses `inject_tool_findings.py` with `_parse_semgrep` parser (JSON output) and Strategy B inline injection. Unlike `bandit_check.sh`, semgrep does NOT skip test files — test code can contain genuinely security-relevant patterns. Test suite: `test_semgrep_check.py` (parser, gate logic, wiring, integration). Hook registered in `CANONICAL_HOOKS` in `test_hook_wiring.py`.

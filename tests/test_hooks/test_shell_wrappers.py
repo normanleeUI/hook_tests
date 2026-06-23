@@ -19,6 +19,7 @@ import ast
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -26,7 +27,9 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from tests.test_hooks.hook_runner import run_bash_hook
+from tests.test_hooks.hook_runner import HOOKS_DIR, run_bash_hook
+
+sys.path.insert(0, str(HOOKS_DIR))
 
 
 def edit_payload(file_path: str) -> dict:
@@ -495,6 +498,116 @@ class TestRuffFormatProperties:
             # Clear log for next example
             if log_file.exists():
                 log_file.write_text("")
+
+
+# ── Pyright venv discovery (Addendum A) ──────────────────────────────────
+
+
+class TestParsePyrightNoStopgap:
+    """_parse_pyright should NOT filter reportMissingImports after venv discovery fix."""
+
+    @pytest.fixture(autouse=True)
+    def _import_parser(self):
+        from inject_tool_findings import _parse_pyright
+
+        self.parse = _parse_pyright
+
+    def test_includes_reportMissingImports(self):
+        """reportMissingImports findings should no longer be filtered out."""
+        output = (
+            '/tmp/test.py:1:8 - error: Import "requests" '
+            "could not be resolved (reportMissingImports)\n"
+            '/tmp/test.py:3:10 - error: Type "str" is not assignable '
+            'to declared type "int" (reportAssignmentType)\n'
+        )
+        findings = self.parse(output, "/tmp/test.py")
+        assert len(findings) == 2
+        assert any("reportMissingImports" in msg for _, msg in findings)
+        assert any("reportAssignmentType" in msg for _, msg in findings)
+
+
+class TestFindVenvPython:
+    """_find_venv_python walks up from the file to locate .venv/bin/python."""
+
+    @pytest.fixture(autouse=True)
+    def _import_fn(self):
+        from inject_tool_findings import _find_venv_python
+
+        self.find = _find_venv_python
+
+    def test_finds_venv_in_same_dir(self, tmp_path):
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / "python"
+        fake_python.write_text("#!/bin/sh\n")
+        fake_python.chmod(fake_python.stat().st_mode | stat.S_IEXEC)
+
+        src = tmp_path / "app.py"
+        src.write_text("x = 1\n")
+
+        result = self.find(str(src))
+        assert result == str(fake_python)
+
+    def test_finds_venv_in_parent_dir(self, tmp_path):
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / "python"
+        fake_python.write_text("#!/bin/sh\n")
+        fake_python.chmod(fake_python.stat().st_mode | stat.S_IEXEC)
+
+        subdir = tmp_path / "src" / "pkg"
+        subdir.mkdir(parents=True)
+        src = subdir / "module.py"
+        src.write_text("x = 1\n")
+
+        result = self.find(str(src))
+        assert result == str(fake_python)
+
+    def test_returns_none_when_no_venv(self, tmp_path):
+        src = tmp_path / "app.py"
+        src.write_text("x = 1\n")
+
+        result = self.find(str(src))
+        assert result is None
+
+
+class TestPyrightVenvArgsIntegration:
+    """Verify that pyright_check.sh passes --pythonpath when a venv exists."""
+
+    def test_passes_pythonpath_when_venv_exists(self, tmp_path):
+        """Hook should pass --pythonpath <venv>/bin/python to pyright."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        log_file = tmp_path / "tool_invocations.log"
+
+        for tool_name in ("uvx", "pyright"):
+            stub = bin_dir / tool_name
+            stub.write_text(
+                f'#!/usr/bin/env bash\necho "{tool_name} $@" >> {log_file}\nexit 0\n'
+            )
+            stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+        proj_dir = tmp_path / "project"
+        proj_dir.mkdir()
+        venv_bin = proj_dir / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / "python"
+        fake_python.write_text("#!/bin/sh\n")
+        fake_python.chmod(fake_python.stat().st_mode | stat.S_IEXEC)
+
+        py_file = proj_dir / "app.py"
+        py_file.write_text("import pytest\nx: int = 1\n")
+
+        env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": os.environ["HOME"]}
+        payload = {
+            "tool_input": {"file_path": str(py_file)},
+            "tool_response": {"filePath": str(py_file)},
+        }
+        run_bash_hook("pyright_check.sh", payload, env=env)
+
+        log = log_file.read_text() if log_file.exists() else ""
+        assert "--pythonpath" in log
+        assert str(fake_python) in log
 
 
 # ── Injection tests (Step 6) ──────────────────────────────────────────────

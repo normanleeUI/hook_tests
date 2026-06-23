@@ -148,10 +148,6 @@ class TestBlockGitAddEnvIntentGaps:
 
     HOOK = "block_git_add_env.py"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: env_file_re requires whitespace or EOL after .env, misses quoted filenames",
-    )
     @given(suffix=_env_suffixes)
     @settings(
         max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture]
@@ -163,10 +159,6 @@ class TestBlockGitAddEnvIntentGaps:
         code, _, _ = run_hook(self.HOOK, bash_payload(cmd))
         assert code == 2, f"git add with quoted {env_file!r} was not blocked"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: env_file_re requires whitespace or EOL after .env, misses single-quoted filenames",
-    )
     @given(suffix=_env_suffixes)
     @settings(
         max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture]

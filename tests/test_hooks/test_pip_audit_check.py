@@ -213,19 +213,11 @@ class TestPipAuditCheckProperties:
 class TestPipAuditCheckKnownBugs:
     """Known bugs in pip_audit_check.py (Step 0d)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: unhandled exception on malformed input",
-    )
     def test_non_dict_json_should_not_crash(self):
         """Step 0d fail-safe: non-dict JSON payload should exit 0, not crash."""
         code, _, _ = run_hook(HOOK, ["not", "a", "dict"])
         assert code == 0
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: unhandled exception on malformed input",
-    )
     def test_null_command_should_not_crash(self):
         """Step 0d fail-safe: null command should exit 0, not crash."""
         code, _, _ = run_hook(HOOK, {"tool_input": {"command": None}})

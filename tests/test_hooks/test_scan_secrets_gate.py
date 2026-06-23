@@ -152,12 +152,11 @@ class TestScanSecretsGate:
         assert code == 0
         assert "PASSED" in stderr
 
-    def test_non_repo_directory_exits_0(self) -> None:
-        """git diff fails in a non-repo directory but the hook ignores the
-        error and exits 0 because it never checks result.returncode."""
+    def test_non_repo_directory_exits_2(self) -> None:
+        """git diff fails in a non-repo directory; hook fails closed (exit 2)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             code, _, _ = run_hook(HOOK, PAYLOAD, cwd=tmpdir)
-            assert code == 0
+            assert code == 2
 
     def test_openai_pattern_matches_sk_ant_without_hyphen(self, git_repo: Path) -> None:
         """sk-antAAAAA... (no hyphen after ant) should match OpenAI pattern, not Anthropic."""
@@ -220,11 +219,12 @@ class TestScanSecretsGate:
 class TestScanSecretsGateStep0d:
     """Step 0d edge cases: fail-closed design and empty diff."""
 
-    def test_secret_on_removed_line_still_blocks(self, git_repo: Path) -> None:
-        """Secret on a removed line (diff '-' prefix) should still block.
+    def test_secret_on_removed_line_passes(self, git_repo: Path) -> None:
+        """Removing a secret (diff '-' prefix) should pass.
 
-        The secret was already in git history. Flagging during removal is
-        fail-closed: the hook scans the full diff including removals.
+        The hook only scans added content lines ('+' prefix), so a secret
+        appearing only on a removed line is not flagged -- the developer is
+        doing the right thing by deleting it.
         """
         _stage_file(git_repo, "secret.py", f"API_KEY = 'sk-ant-{'A' * 20}'\n")
         subprocess.run(
@@ -235,8 +235,8 @@ class TestScanSecretsGateStep0d:
         # Now remove the secret line
         _stage_file(git_repo, "secret.py", "# secret removed\n")
         code, stderr, _ = run_hook(HOOK, PAYLOAD, cwd=str(git_repo))
-        assert code == 2  # fail-closed: secret appears in diff even on removed line
-        assert "BLOCKED" in stderr
+        assert code == 0
+        assert "PASSED" in stderr
 
     def test_empty_staged_diff_exits_0(self, git_repo: Path) -> None:
         """Empty staged diff (nothing staged) exits 0."""
@@ -252,10 +252,6 @@ class TestScanSecretsGateKnownBugs:
     strict=True ensures we notice when the bug gets fixed.
     """
 
-    @pytest.mark.xfail(
-        reason="hook bug: does not check git diff returncode, silently passes on git errors",
-        strict=True,
-    )
     def test_git_error_should_fail_closed(self, git_repo: Path) -> None:
         """Hook should fail-closed (exit 2) when git diff returns an error,
         not silently pass. Currently the hook ignores result.returncode."""
@@ -265,10 +261,6 @@ class TestScanSecretsGateKnownBugs:
         code, _, _ = run_hook(HOOK, PAYLOAD, cwd=str(git_repo))
         assert code == 2
 
-    @pytest.mark.xfail(
-        reason="hook bug: scans diff headers including filenames, causing false positives on secret-like filenames",
-        strict=True,
-    )
     def test_secret_like_filename_clean_content_should_pass(
         self, git_repo: Path
     ) -> None:

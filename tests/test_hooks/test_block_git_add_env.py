@@ -184,10 +184,6 @@ class TestBlockGitAddEnvProperties:
 class TestBlockGitAddEnvKnownBugs:
     """Cases where block_git_add_env.py SHOULD block bulk adds but doesn't (Step 0d)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: bulk_add_re requires ./--all/-A immediately after 'git add'",
-    )
     @pytest.mark.parametrize(
         "cmd",
         [
@@ -205,37 +201,21 @@ class TestBlockGitAddEnvKnownBugs:
         code, _, _ = run_hook(HOOK, bash_payload(cmd))
         assert code == 2
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: -C /path between git and add breaks regex",
-    )
     def test_git_C_path_add_dot_should_block(self, bash_payload):
         """Step 0d: git -C /path add . should still be caught as bulk add."""
         code, _, _ = run_hook(HOOK, bash_payload("git -C /other/project add ."))
         assert code == 2
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: -C /path between git and add breaks regex",
-    )
     def test_git_C_tmp_add_A_should_block(self, bash_payload):
         """Step 0d: git -C /tmp add -A should still be caught as bulk add."""
         code, _, _ = run_hook(HOOK, bash_payload("git -C /tmp add -A"))
         assert code == 2
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: -u/--update not in regex alternation",
-    )
     def test_git_add_u_should_block(self, bash_payload):
         """Step 0d: git add -u stages all tracked modified files -- equivalent to bulk add."""
         code, _, _ = run_hook(HOOK, bash_payload("git add -u"))
         assert code == 2
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: -u/--update not in regex alternation",
-    )
     def test_git_add_update_should_block(self, bash_payload):
         """Step 0d: git add --update stages all tracked modified files -- equivalent to bulk add."""
         code, _, _ = run_hook(HOOK, bash_payload("git add --update"))

@@ -11,7 +11,6 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -137,10 +136,6 @@ class TestBlockGlobDenyRulesProperties:
 class TestBlockGlobDenyRulesKnownBugs:
     """Tests for known bugs — these document expected failures."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: hook only checks allowRead and denyRead, not write counterparts",
-    )
     def test_double_star_in_deny_write_should_block(self, tmp_path):
         """** in sandbox.filesystem.denyWrite should block but doesn't."""
         content = {"sandbox": {"filesystem": {"denyWrite": ["**/secrets"]}}}
@@ -148,10 +143,6 @@ class TestBlockGlobDenyRulesKnownBugs:
         code, _, _ = run_hook(HOOK, _make_payload(str(settings_file), content))
         assert code == 2
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: hook only checks allowRead and denyRead, not write counterparts",
-    )
     def test_double_star_in_allow_write_should_block(self, tmp_path):
         """** in sandbox.filesystem.allowWrite should block but doesn't."""
         content = {"sandbox": {"filesystem": {"allowWrite": ["**/src"]}}}

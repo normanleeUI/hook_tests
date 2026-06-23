@@ -226,10 +226,6 @@ class TestDependencyPinsProperties:
         )
         assert code == 0
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="hook bug: environment marker < fools upper-bound detection",
-    )
     @pytest.mark.parametrize(
         "dep_line",
         [

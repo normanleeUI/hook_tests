@@ -8,13 +8,6 @@ Three test classes:
 - TestNoCrashOnAdversarialInput: 18 hooks x 18 payloads via run_hook
 - TestNoCrashOnInvalidJson: 18 hooks x 6 raw inputs via subprocess
 - TestNoCrashOnHypothesisPayloads: 5 high-value hooks x hypothesis JSON
-
-Known issue: many Python hooks lack try/except around json.loads() and
-.get() chains, so they crash (exit 1 + traceback) on non-dict JSON,
-None values, and invalid JSON. These are marked xfail(strict=True) to
-document the bugs without blocking the test suite. When a hook is fixed,
-its xfail becomes a strict xpass failure and pytest will flag it for
-removal.
 """
 
 import json
@@ -53,97 +46,6 @@ ADVERSARIAL_PAYLOADS: list = [
     True,
 ]
 
-# --- Known hook robustness gaps (documented by these tests) ---
-
-# Python hooks that crash on non-dict JSON ([], "string", 42, True).
-# Root cause: `data.get("tool_input", {})` fails with AttributeError
-# when data is not a dict.
-_CRASH_ON_NON_DICT = {
-    "block_read_env.py",
-    "block_bare_pip.py",
-    "block_git_add_env.py",
-    "block_glob_deny_rules.py",
-    "block_suppressions.py",
-    "check_dependency_pins.py",
-    "check_docstrings.py",
-    "check_random_seeds.py",
-    "pip_audit_check.py",
-    "scan_prompt_injection.py",
-}
-
-# Python hooks that crash on {"tool_input": None}.
-# Root cause: `data.get("tool_input", {}).get(...)` -- the fallback {} is
-# never reached because the key exists with value None, then None.get() fails.
-_CRASH_ON_NONE_TOOL_INPUT = {
-    "block_read_env.py",
-    "block_bare_pip.py",
-    "block_git_add_env.py",
-    "block_glob_deny_rules.py",
-    "check_docstrings.py",
-    "check_random_seeds.py",
-}
-
-# Hooks that crash on {"tool_input": {"command": None}} or {"file_path": None}.
-_CRASH_ON_NONE_COMMAND = {
-    "block_bare_pip.py",
-    "block_git_add_env.py",
-    "block_read_env.py",
-    "pip_audit_check.py",
-}
-_CRASH_ON_NONE_FILE_PATH = {"block_glob_deny_rules.py", "block_read_env.py"}
-
-# Python hooks that crash on json.JSONDecodeError (empty, truncated, binary input).
-# These lack try/except around json.loads(sys.stdin.read()).
-_CRASH_ON_JSON_ERROR = {
-    "block_read_env.py",
-    "block_bare_pip.py",
-    "block_git_add_env.py",
-    "block_glob_deny_rules.py",
-    "check_docstrings.py",
-    "check_random_seeds.py",
-    "scan_prompt_injection.py",
-}
-
-# Python hooks that crash on JSON null ("null" -> None in Python).
-# Same root cause as _CRASH_ON_NON_DICT.
-_CRASH_ON_JSON_NULL = _CRASH_ON_NON_DICT
-
-
-def _known_adversarial_crash(hook_name: str, payload: object) -> str | None:
-    """Return xfail reason if (hook, payload) is a known crash, else None.
-
-    Only returns a reason for (hook, payload) combinations where the crash
-    is deterministic -- the hook is known to always crash on this exact
-    payload shape due to a documented root cause.
-    """
-    if not isinstance(payload, dict):
-        if hook_name in _CRASH_ON_NON_DICT:
-            return "Hook lacks type check: crashes on non-dict JSON"
-        return None
-
-    if payload == {"tool_input": None} and hook_name in _CRASH_ON_NONE_TOOL_INPUT:
-        return "Hook crashes when tool_input is None (AttributeError on None.get())"
-    if (
-        payload == {"tool_input": {"command": None}}
-        and hook_name in _CRASH_ON_NONE_COMMAND
-    ):
-        return "Hook crashes on None command value"
-    if (
-        payload == {"tool_input": {"file_path": None}}
-        and hook_name in _CRASH_ON_NONE_FILE_PATH
-    ):
-        return "Hook crashes on None file_path value"
-    return None
-
-
-def _known_invalid_json_crash(hook_name: str, raw_input: str) -> str | None:
-    """Return xfail reason if (hook, raw_input) is a known crash, else None."""
-    if raw_input == "null" and hook_name in _CRASH_ON_JSON_NULL:
-        return "Hook crashes on JSON null (None has no .get())"
-    if raw_input != "null" and hook_name in _CRASH_ON_JSON_ERROR:
-        return "Hook lacks try/except around json.loads()"
-    return None
-
 
 def _payload_id(payload: object) -> str:
     return str(payload)[:40]
@@ -160,15 +62,10 @@ class TestNoCrashOnAdversarialInput:
     )
     def test_no_crash(
         self,
-        request: pytest.FixtureRequest,
         hook_name: str,
         interpreter: str,
         payload: object,
     ) -> None:
-        reason = _known_adversarial_crash(hook_name, payload)
-        if reason:
-            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
-
         if interpreter == "bash":
             code, stderr, _ = run_bash_hook(hook_name, payload, timeout=5)
         else:
@@ -199,16 +96,11 @@ class TestNoCrashOnInvalidJson:
     @pytest.mark.parametrize("raw_input", INVALID_INPUTS)
     def test_invalid_json_no_crash(
         self,
-        request: pytest.FixtureRequest,
         hook_name: str,
         interpreter: str,
         raw_input: str,
     ) -> None:
         """Direct subprocess call with raw string input (bypasses json.dumps in run_hook)."""
-        reason = _known_invalid_json_crash(hook_name, raw_input)
-        if reason:
-            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
-
         script = HOOKS_DIR / hook_name
         if not script.exists():
             pytest.skip(f"Hook not found: {hook_name}")
@@ -262,16 +154,11 @@ class TestNoCrashOnHypothesisPayloads:
     )
     def test_fuzzed_payload_no_crash(
         self,
-        request: pytest.FixtureRequest,
         hook_name: str,
         interpreter: str,
         payload: object,
     ) -> None:
         """High-value hooks must not crash on arbitrary JSON structures."""
-        reason = _known_adversarial_crash(hook_name, payload)
-        if reason:
-            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
-
         script = HOOKS_DIR / hook_name
         if not script.exists():
             pytest.skip(f"Hook not found: {hook_name}")
@@ -283,7 +170,6 @@ class TestNoCrashOnHypothesisPayloads:
 
         result = subprocess.run(
             [interpreter, str(script)],
-# HOOK:PYRIGHT: "input_str" is possibly unbound (reportPossiblyUnboundVariable)
             input=input_str,
             capture_output=True,
             text=True,

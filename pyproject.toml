@@ -13,6 +13,8 @@ dev = [
     "mutmut>=3.2,<4",
     "pytest-xdist>=3.8.0",
     "ruff>=0.8.0",
+    "bandit>=1.9,<2",
+    "pyright>=1.1,<2",
 ]
 
 [tool.pytest.ini_options]

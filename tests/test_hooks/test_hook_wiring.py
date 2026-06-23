@@ -79,7 +79,7 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "event": "PreToolUse",
         "interpreter": "python3",
         "matcher": "Bash",
-        "if_condition": "Bash(*uv add*)|Bash(*uv sync*)|Bash(*uv pip install*)",
+        "if_condition": None,
     },
     # PreToolUse -- Edit|Write group (blocking hooks)
     "block_glob_deny_rules.py": {
@@ -135,7 +135,7 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "event": "PostToolUse",
         "interpreter": "python3",
         "matcher": "Bash",
-        "if_condition": "Bash(*uv add*)|Bash(*uv sync*)|Bash(*uv pip install*)",
+        "if_condition": None,
     },
     # PostToolUse -- WebFetch|mcp__.*
     "scan_prompt_injection.py": {

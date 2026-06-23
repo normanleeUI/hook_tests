@@ -532,6 +532,51 @@ class TestDependencyPinsPyprojectParserEdgeCases:
         )
         assert code == 0
 
+    def test_single_line_bare_name_blocked(self, edit_payload):
+        """Single-line dependencies array with bare name is blocked."""
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload(
+                "/project/pyproject.toml",
+                'dependencies = ["requests>=2.31.0,<3", "flask"]',
+            ),
+        )
+        assert code == 2
+
+    def test_single_line_all_pinned_allowed(self, edit_payload):
+        """Single-line dependencies array with all pinned deps is allowed."""
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload(
+                "/project/pyproject.toml",
+                'dependencies = ["requests==2.31.0", "flask>=3.0,<4"]',
+            ),
+        )
+        assert code == 0
+
+    def test_single_line_mixed_pins_blocks_unpinned(self, edit_payload):
+        """Single-line array with one pinned and one bare name blocks."""
+        code, stderr, _ = run_hook(
+            HOOK,
+            edit_payload(
+                "/project/pyproject.toml",
+                'dependencies = ["requests==2.31.0", "httpx"]',
+            ),
+        )
+        assert code == 2
+        assert "httpx" in stderr
+
+    def test_single_line_empty_array_allowed(self, edit_payload):
+        """Single-line empty dependencies array is allowed."""
+        code, _, _ = run_hook(
+            HOOK,
+            edit_payload(
+                "/project/pyproject.toml",
+                "dependencies = []",
+            ),
+        )
+        assert code == 0
+
 
 class TestDependencyPinsPreToolUse:
     """PreToolUse payloads have no tool_response key — verify hook works without it."""

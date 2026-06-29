@@ -240,23 +240,12 @@ class TestSemgrepCheckShell:
 class TestSemgrepWiring:
     """Verify hook is correctly registered and script exists."""
 
-    def test_registered_in_settings(self):
-        """TEST-SEMGREP-W01: hook entry exists in settings.json."""
-        settings_path = HOOKS_DIR.parent / "settings.json"
-        with open(settings_path) as f:
-            settings = json.load(f)
-
-        post_tool_use = settings.get("hooks", {}).get("PostToolUse", [])
-        semgrep_entries = []
-        for group in post_tool_use:
-            if group.get("matcher") == "Edit|Write":
-                for hook in group.get("hooks", []):
-                    if "semgrep_check" in hook.get("command", ""):
-                        semgrep_entries.append(hook)
-
-        assert len(semgrep_entries) == 1, (
-            f"Expected exactly 1 semgrep_check entry, found {len(semgrep_entries)}"
-        )
+    def test_called_by_batch_checks(self):
+        """TEST-SEMGREP-W01: semgrep_check is called by batch_checks.sh (Stop hook)."""
+        batch_script = HOOKS_DIR / "batch_checks.sh"
+        assert batch_script.exists(), "batch_checks.sh not found"
+        content = batch_script.read_text()
+        assert "SEMGREP" in content, "batch_checks.sh does not reference SEMGREP"
 
     def test_script_exists(self):
         """TEST-SEMGREP-W02: hook script file exists on disk."""

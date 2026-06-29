@@ -34,14 +34,14 @@ Empirically validated output channels (see `probes/PROBE_RESULTS_PHASE2.md`):
 **Key limitations:**
 - Read matcher exit-2 blocks show only a red dot (stderr not rendered), but the block works
 - PostToolUse exit 2 is **cosmetic** — the edit already happened; only informs Claude
-- PostToolUse hooks in the same group run **in parallel** — file locking serializes writes
+- PostToolUse hooks in the same group run **in parallel** — currently only ruff_format is in the Edit|Write group, so this is not a concern; batch_checks.sh runs tools sequentially
 - `if:` conditions work for single patterns; `|` OR syntax does NOT work
 
 ---
 
 ## Reference: Current Hook Wiring
 
-20 active hooks across 8 groups:
+16 active hooks across 7 groups:
 
 | Event | Matcher | Hooks | Strategy |
 |-------|---------|-------|----------|
@@ -49,10 +49,10 @@ Empirically validated output channels (see `probes/PROBE_RESULTS_PHASE2.md`):
 | PreToolUse | Read | block_read_env | D (dual-wiring) |
 | PreToolUse | Bash | block_read_env, block_bare_pip, scan_secrets_on_commit (`if: git commit*`), block_git_add_env (`if: git add*`), pip_audit_guard | exit 2 blocks |
 | PreToolUse | Edit\|Write | check_dependency_pins, block_suppressions, block_glob_deny_rules | A (promotion) |
-| PostToolUse | Edit\|Write | ruff_format, pyright_check, check_docstrings, check_random_seeds, bandit_check, semgrep_check | B (inline injection) |
+| PostToolUse | Edit\|Write | ruff_format | SIDE-EFFECT (reformat) |
 | PostToolUse | Bash | pip_audit_check | C (state-file) |
 | PostToolUse | WebFetch\|mcp__.* | scan_prompt_injection | MODEL-CONTEXT |
-| Stop | (none) | ruff_lint | SIDE-EFFECT |
+| Stop | (none) | ruff_lint, batch_checks (pyright, bandit, semgrep, docstrings, seeds) | SIDE-EFFECT + inline injection |
 
 ---
 
@@ -376,17 +376,20 @@ Phrase as: "edit `<file>` to `<change>`" or "add `<content>` to `<file>`"
 
 ---
 
-## Batch 6: PostToolUse inline injection (~15 min)
+## Batch 6: Stop-hook batch checks + PostToolUse ruff_format (~15 min)
 
-Strategy B hooks fire after an Edit/Write completes and inject `# HOOK:<NAME>: <msg>`
-comments at relevant lines. Comments are self-cleaning (stale ones removed each run).
+`batch_checks.sh` runs at **Stop** (end of turn) on all `.py` files changed
+during the turn. It runs pyright, bandit, and semgrep once each in batch mode,
+then check_docstrings and check_random_seeds per-file. All inject `# HOOK:<NAME>:`
+comments into the source files.
 
-**Parallel execution**: All PostToolUse Edit|Write hooks run in parallel with
-`fcntl.flock` serializing the read-modify-write phase.
+`ruff_format.sh` remains a **PostToolUse Edit|Write** hook — it reformats
+immediately after each edit.
 
-**After each edit, check the file for `# HOOK:` comments.**
+**Testing pattern**: Ask Claude to make an edit, let the turn complete (Stop
+fires), then check files and debug log from your normal terminal.
 
-### ruff_format.sh
+### ruff_format.sh (PostToolUse)
 
 > **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
 > **Observe via**: SIDE-EFFECT (file reformatted on disk).
@@ -394,58 +397,65 @@ comments at relevant lines. Comments are self-cleaning (stale ones removed each 
 - [ ] 6.1: edit `src/clean_module.py` and add a function with bad formatting: `def    messy(  x,y  ) :  return   x+y` — file reformatted by ruff → `git diff src/clean_module.py`
 - [ ] 6.2: edit `fixtures/sample_r_file.R` and add a comment — no formatting applied → `git diff fixtures/sample_r_file.R`
 
-### pyright_check.sh
+### batch_checks.sh (Stop)
 
-> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
-> **Observe via**: INLINE — `# HOOK:PYRIGHT: <error>` comments.
+> **Wiring**: Stop, no matcher.
+> **Observe via**: INLINE — `# HOOK:PYRIGHT:`, `# HOOK:BANDIT:`, `# HOOK:SEMGREP:`,
+> `# HOOK:DOCSTRING:`, `# HOOK:SEED:` comments injected into changed `.py` files.
+> `batch_checks.sh` finds changed files via `git diff`, skips deleted files and
+> `.claude/` paths, skips non-`.py` files.
 
-- [ ] 6.3: edit `src/type_errors.py` — add a blank line at the end → `./scripts/observe.sh pyright_check src/type_errors.py` — `# HOOK:PYRIGHT:` comments at type error lines
-- [ ] 6.4: edit `src/clean_module.py` — add a blank line → `./scripts/observe.sh pyright_check src/clean_module.py` — no `# HOOK:PYRIGHT:` comments
-- [ ] 6.5: edit `fixtures/sample_r_file.R` — add a line → `./scripts/observe.sh pyright_check fixtures/sample_r_file.R` — hook skips
-- [ ] 6.6: **Visibility test** (after 6.3): Does Claude mention pyright findings in its response? (It should — it reads back the file and sees the comments)
+**Test 6.3 — trigger file with known issues**
 
-### check_docstrings.py
+> Ask Claude to edit `src/type_errors.py` — add a blank line at the end. Let the
+> turn complete. Then check from your normal terminal:
 
-> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
-> **Observe via**: INLINE — `# HOOK:DOCSTRING: <msg>` comments.
+- [ ] `./scripts/observe.sh batch_checks src/type_errors.py` — hook FIRED, `# HOOK:PYRIGHT:` comments at type error lines
+- [ ] Claude's next turn sees the inline comments (they're in the file)
 
-- [ ] 6.7: edit `src/missing_docstrings.py` — add a blank line → `./scripts/observe.sh check_docstrings src/missing_docstrings.py` — `# HOOK:DOCSTRING:` at undocumented functions
-- [ ] 6.8: edit any `test_*.py` file — add a blank line → `./scripts/observe.sh check_docstrings` — hook skips (test files excluded)
+**Test 6.4 — clean file**
 
-### check_random_seeds.py
+> Ask Claude to edit `src/clean_module.py` — add a blank line. Let the turn complete.
 
-> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
-> **Observe via**: INLINE — `# HOOK:SEED: <msg>` comments.
+- [ ] `./scripts/observe.sh batch_checks src/clean_module.py` — hook FIRED, no `# HOOK:` comments (clean file)
 
-- [ ] 6.9: edit `src/unseeded_random.py` — add a blank line → `./scripts/observe.sh check_random_seeds src/unseeded_random.py` — `# HOOK:SEED:` at unseeded usage
-- [ ] 6.10: edit `src/clean_module.py` — add a blank line → `./scripts/observe.sh check_random_seeds src/clean_module.py` — no seed comments
+**Test 6.5 — non-Python file skipped**
 
-### bandit_check.sh
+> Ask Claude to edit `fixtures/sample_r_file.R` — add a comment. Let the turn complete.
 
-> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
-> **Observe via**: INLINE — `# HOOK:BANDIT: <finding>` comments.
+- [ ] `./scripts/observe.sh batch_checks` — hook FIRED, but `.R` file has no `# HOOK:` comments
 
-- [ ] 6.11: edit `src/security_issues.py` — add a blank line → `./scripts/observe.sh bandit_check src/security_issues.py` — `# HOOK:BANDIT:` at security issues
-- [ ] 6.12: edit `src/clean_module.py` — add a blank line → `./scripts/observe.sh bandit_check src/clean_module.py` — no bandit comments
+**Test 6.6 — docstrings**
 
-### semgrep_check.sh
+> Ask Claude to edit `src/missing_docstrings.py` — add a blank line. Let the turn complete.
 
-> **Wiring**: PostToolUse, matcher=Edit|Write, no `if:`.
-> **Observe via**: INLINE — `# HOOK:SEMGREP: <finding>` comments.
+- [ ] `./scripts/observe.sh batch_checks src/missing_docstrings.py` — `# HOOK:DOCSTRING:` at undocumented functions
 
-- [ ] 6.13: edit `src/security_issues.py` — add a blank line → `./scripts/observe.sh semgrep_check src/security_issues.py` — `# HOOK:SEMGREP:` at security issues
-- [ ] 6.14: edit a `.txt` file → `./scripts/observe.sh semgrep_check` — hook skips
+**Test 6.7 — test files excluded from docstring checks**
 
-### Integration: multiple injection hooks + parallel execution
+> Ask Claude to edit any `test_*.py` file — add a blank line. Let the turn complete.
 
-> Verify file locking prevents lost writes when multiple hooks inject into the same file.
+- [ ] No `# HOOK:DOCSTRING:` comments (test files excluded)
 
-- [ ] 6.15: edit `src/multi_trigger.py` — add a blank line → `./scripts/observe.sh --all src/multi_trigger.py`
-  - MULTIPLE `# HOOK:` comments appear: PYRIGHT, BANDIT, DOCSTRING, SEED, possibly SEMGREP
-  - No lost writes (all expected hooks produced output)
-- [ ] 6.16: check debug log for overlapping timestamps (parallel execution) → `grep -E 'pyright|bandit|docstring|random_seeds|semgrep|ruff_format' /tmp/hook_debug.log | tail -20`
-- [ ] 6.17: edit `src/multi_trigger.py` again — add another blank line → `./scripts/observe.sh --all src/multi_trigger.py`
-  - Stale `# HOOK:` comments cleaned up, fresh ones injected
+**Test 6.8 — random seeds**
+
+> Ask Claude to edit `src/unseeded_random.py` — add a blank line. Let the turn complete.
+
+- [ ] `./scripts/observe.sh batch_checks src/unseeded_random.py` — `# HOOK:SEED:` at unseeded usage
+
+**Test 6.9 — security issues**
+
+> Ask Claude to edit `src/security_issues.py` — add a blank line. Let the turn complete.
+
+- [ ] `./scripts/observe.sh batch_checks src/security_issues.py` — `# HOOK:BANDIT:` and/or `# HOOK:SEMGREP:` at security issues
+
+### Integration: multi-trigger file
+
+> Ask Claude to edit `src/multi_trigger.py` — add a blank line. Let the turn complete.
+
+- [ ] 6.10: `./scripts/observe.sh --all src/multi_trigger.py` — MULTIPLE `# HOOK:` comments: PYRIGHT, BANDIT, DOCSTRING, SEED, possibly SEMGREP
+- [ ] 6.11: debug log shows batch_checks ran each tool sequentially → `grep batch_checks /tmp/hook_debug.log | tail -10`
+- [ ] 6.12: ask Claude to edit `src/multi_trigger.py` again, let turn complete — stale `# HOOK:` comments cleaned up, fresh ones injected
 
 ```bash
 ./scripts/observe.sh --reset
@@ -453,17 +463,30 @@ comments at relevant lines. Comments are self-cleaning (stale ones removed each 
 
 ---
 
-## Batch 7: Cross-cutting — PreToolUse blocks PostToolUse (~2 min)
+## Batch 7: Cross-cutting — PreToolUse blocks vs. Stop batch checks (~5 min)
 
 When a PreToolUse Edit|Write hook blocks (exit 2), the edit never happens, so
-PostToolUse Edit|Write hooks have nothing to process.
+ruff_format (PostToolUse) has nothing to process. The Stop-hook batch_checks
+still runs, but finds files via `git diff` — a blocked edit means no diff, so
+it has nothing to check for that file either.
 
-- [ ] 7.1: edit `src/clean_module.py` and add a line `x = 1  # type: ignore` → `./scripts/observe.sh --all src/clean_module.py`
-  - block_suppressions (PreToolUse) BLOCKS
-  - ruff_format did NOT run
-  - pyright_check did NOT run
-  - No `# HOOK:` comments appear (file was never modified)
-  - `git diff` shows file unchanged
+**Test 7.1 — blocked edit produces no downstream effects**
+
+> Ask Claude to edit `src/clean_module.py` and add a line `x = 1  # type: ignore`.
+> Let the turn complete.
+
+- [ ] block_suppressions (PreToolUse) BLOCKS the edit
+- [ ] `git diff` shows `src/clean_module.py` unchanged
+- [ ] `./scripts/observe.sh --all src/clean_module.py` — ruff_format did NOT run on this file, no `# HOOK:` comments
+
+**Test 7.2 — blocked edit doesn't prevent batch_checks on other files**
+
+> In the same turn, ask Claude to also edit `src/type_errors.py` (add a blank line).
+> The suppression edit is blocked, but the type_errors edit should succeed.
+
+- [ ] `src/clean_module.py` unchanged (blocked)
+- [ ] `src/type_errors.py` has `# HOOK:PYRIGHT:` comments (batch_checks ran on this file)
+- [ ] `./scripts/observe.sh batch_checks` — hook FIRED
 
 ```bash
 ./scripts/observe.sh --reset
@@ -494,6 +517,8 @@ PostToolUse Edit|Write hooks have nothing to process.
 
 > **Wiring**: Stop, no matcher.
 > **Observe via**: SIDE-EFFECT (files auto-fixed after turn ends).
+> Note: batch_checks.sh also fires at Stop. These tests focus on ruff_lint behavior;
+> batch_checks was covered in Batch 6.
 
 - [ ] 8.4: edit `src/clean_module.py` and add `import os` at the top (unused import), let the turn complete — after Claude finishes, unused import auto-removed → `git diff src/clean_module.py`
 - [ ] 8.5: edit `src/clean_module.py` (already clean) — add a docstring tweak — no side effects → `git diff src/clean_module.py`

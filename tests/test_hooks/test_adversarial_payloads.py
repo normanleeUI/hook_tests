@@ -20,9 +20,13 @@ from hypothesis import strategies as st
 from tests.test_hooks.hook_runner import HOOKS_DIR, run_bash_hook, run_hook
 from tests.test_hooks.test_hook_wiring import CANONICAL_HOOKS
 
-# HOOK:PYRIGHT: Type "dict[str, str | None]" is not assignable to declared type "dict[str, str]" (reportAssignmentType)
+# Stop hooks that read git state, not stdin JSON
+STDIN_INDEPENDENT = {"batch_checks.sh", "ruff_lint.sh"}
+
 ALL_HOOKS: dict[str, str] = {
-    name: cfg["interpreter"] for name, cfg in CANONICAL_HOOKS.items()
+    name: cfg["interpreter"]
+    for name, cfg in CANONICAL_HOOKS.items()
+    if name not in STDIN_INDEPENDENT
 }
 
 ADVERSARIAL_PAYLOADS: list = [

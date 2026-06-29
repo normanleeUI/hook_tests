@@ -1,4 +1,4 @@
-"""Automated config validation: verify all 18 hooks are correctly wired.
+"""Automated config validation: verify all 14 hooks are correctly wired.
 
 Parses ~/.claude/settings.json and checks that every canonical hook is
 present with the correct event type, matcher, and if-condition. Also
@@ -53,7 +53,6 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
     "block_read_env.py": {
         "event": "PreToolUse",
         "interpreter": "python3",
-# HOOK:PYRIGHT: Type "dict[str, dict[str, str | None] | dict[str, str | list[str] | None]]" is not assignable to declared type "dict[str, dict[str, str | None]]"
         "matcher": ["Read", "Bash"],
         "if_condition": None,
     },
@@ -94,26 +93,8 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Edit|Write",
         "if_condition": None,
     },
-    "pyright_check.sh": {
-        "event": "PostToolUse",
-        "interpreter": "bash",
-        "matcher": "Edit|Write",
-        "if_condition": None,
-    },
-    "check_docstrings.py": {
-        "event": "PostToolUse",
-        "interpreter": "python3",
-        "matcher": "Edit|Write",
-        "if_condition": None,
-    },
     "check_dependency_pins.py": {
         "event": "PreToolUse",
-        "interpreter": "python3",
-        "matcher": "Edit|Write",
-        "if_condition": None,
-    },
-    "check_random_seeds.py": {
-        "event": "PostToolUse",
         "interpreter": "python3",
         "matcher": "Edit|Write",
         "if_condition": None,
@@ -121,18 +102,6 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
     "block_suppressions.py": {
         "event": "PreToolUse",
         "interpreter": "python3",
-        "matcher": "Edit|Write",
-        "if_condition": None,
-    },
-    "bandit_check.sh": {
-        "event": "PostToolUse",
-        "interpreter": "bash",
-        "matcher": "Edit|Write",
-        "if_condition": None,
-    },
-    "semgrep_check.sh": {
-        "event": "PostToolUse",
-        "interpreter": "bash",
         "matcher": "Edit|Write",
         "if_condition": None,
     },
@@ -157,6 +126,12 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": None,
         "if_condition": None,
     },
+    "batch_checks.sh": {
+        "event": "Stop",
+        "interpreter": "bash",
+        "matcher": None,
+        "if_condition": None,
+    },
 }
 
 DEPRECATED_HOOKS: dict[str, str] = {
@@ -171,6 +146,12 @@ KNOWN_LIBRARIES: set[str] = {
     "hook_log.py",
     "hook_inject.py",
     "inject_tool_findings.py",
+    # Called by batch_checks.sh, not individually wired
+    "pyright_check.sh",
+    "check_docstrings.py",
+    "check_random_seeds.py",
+    "bandit_check.sh",
+    "semgrep_check.sh",
 }
 
 
@@ -207,7 +188,6 @@ class TestScriptExistence:
     def test_all_wired_scripts_exist(self):
         settings = load_settings()
         for entry in extract_wired_scripts(settings):
-# HOOK:PYRIGHT: "split" is not a known attribute of "None" (reportOptionalMemberAccess)
             script_path = Path(entry["command"].split()[-1])
             assert script_path.exists(), (
                 f"Wired script missing: {script_path} "
@@ -217,7 +197,6 @@ class TestScriptExistence:
     def test_all_wired_scripts_readable(self):
         settings = load_settings()
         for entry in extract_wired_scripts(settings):
-# HOOK:PYRIGHT: "split" is not a known attribute of "None" (reportOptionalMemberAccess)
             script_path = Path(entry["command"].split()[-1])
             assert os.access(script_path, os.R_OK), f"Not readable: {script_path}"
 
@@ -245,7 +224,6 @@ class TestCanonicalList:
             )
             expected_matcher = expected["matcher"]
             if isinstance(expected_matcher, list):
-# HOOK:PYRIGHT: Operator "in" not supported for types "str | None" and "<subclass of str and list>"
                 assert entry["matcher"] in expected_matcher, (
                     f"{name}: matcher {entry['matcher']} not in expected {expected_matcher}"
                 )

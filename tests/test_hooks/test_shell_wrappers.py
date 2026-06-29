@@ -266,9 +266,18 @@ class TestRuffLint:
     """ruff_lint.sh: lint-fix changed .py files at session end."""
 
     def test_runs_on_changed_files(self, fake_tool_env, tmp_path):
-        """When there are changed .py files, ruff check --fix should run."""
+        """When there are changed .py files, .venv/bin/ruff check --fix should run."""
         env, log_file = fake_tool_env
         _init_git_repo(tmp_path)
+
+        # ruff_lint.sh calls .venv/bin/ruff directly, not uvx
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        ruff_stub = venv_bin / "ruff"
+        ruff_stub.write_text(
+            f'#!/usr/bin/env bash\necho "ruff $@" >> {log_file}\nexit 0\n'
+        )
+        ruff_stub.chmod(ruff_stub.stat().st_mode | stat.S_IEXEC)
 
         # Create and commit a .py file, then modify it so it shows in git diff
         py_file = tmp_path / "app.py"
@@ -289,7 +298,7 @@ class TestRuffLint:
         run_bash_hook("ruff_lint.sh", {}, env=env, cwd=str(tmp_path))
 
         log = _read_log(log_file)
-        assert "uvx ruff check --fix" in log
+        assert "ruff check --fix" in log
         assert "app.py" in log, "ruff should have been passed the changed file"
 
     def test_noops_without_git(self, fake_tool_env, tmp_path):

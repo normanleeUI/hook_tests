@@ -188,10 +188,14 @@ PYEOF
             FAIL:*)  fail "Hook group: ${line#FAIL:}  (missing)" ;;
             TOTAL:*)
                 total="${line#TOTAL:}"
-                if [[ "$total" -eq 20 ]]; then
-                    pass "Total hooks wired: $total (expected 20)"
+                # 16 = 17 wired entries minus the block_read_env.py dup (wired on
+                # both Read and Bash; counted once as a unique command string).
+                # Down from 20 after the channel redesign folded pyright/bandit/
+                # semgrep/docstrings/seeds into the single batch_checks.sh Stop hook.
+                if [[ "$total" -eq 16 ]]; then
+                    pass "Total hooks wired: $total (expected 16)"
                 else
-                    fail "Total hooks wired: $total (expected 20)"
+                    fail "Total hooks wired: $total (expected 16)"
                 fi
                 ;;
         esac

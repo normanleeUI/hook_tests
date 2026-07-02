@@ -16,6 +16,7 @@ run the hook, then check the log to see whether/how the tool was called.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import stat
 import subprocess
@@ -387,71 +388,114 @@ class TestGitPullOnStart:
 
 
 class TestCheckDepFreshness:
-    """check_dep_freshness.sh: warn if deps haven't been checked recently."""
+    """check_dep_freshness.sh: warn if deps haven't been checked recently.
 
-    def test_warns_when_stale(self, fake_tool_env, tmp_path):
-        """When .last_dep_check is older than threshold, emit a warning."""
-        env, log_file = fake_tool_env
+    Intent (TESTING.md, "SESSION-STDOUT"): when deps are stale the hook must
+    surface a warning through the SessionStart stdout channel as a JSON
+    ``systemMessage`` — the same convention git_pull_on_start.sh uses. Probes
+    proved stderr-on-exit-0 is invisible, so a warning written only to stderr
+    reaches nobody. These tests assert the *intended* channel, not whatever the
+    hook happens to do; the earlier versions asserted ``"WARNING" in stderr``,
+    which codified the bug fixed during wiring test 1.1.
+    """
+
+    @staticmethod
+    def _run_stale_check(tmp_path, env, *, marker_age_days=None, uvlock_age_days=None):
+        """Set up a temp repo and run the hook. Ages in days; None = don't create.
+
+        Returns (rc, stderr, stdout).
+        """
         _init_git_repo(tmp_path)
-
-        # Create uv.lock so the hook doesn't bail early
-        (tmp_path / "uv.lock").write_text("")
-
-        # Create .last_dep_check with old mtime (60 days ago)
-        marker = tmp_path / ".last_dep_check"
-        marker.write_text("")
-        old_time = time.time() - (60 * 86400)
-        os.utime(str(marker), (old_time, old_time))
-
-        rc, stderr, stdout = run_bash_hook(
+        if uvlock_age_days is not None:
+            lock = tmp_path / "uv.lock"
+            lock.write_text("")
+            t = time.time() - (uvlock_age_days * 86400)
+            os.utime(str(lock), (t, t))
+        if marker_age_days is not None:
+            marker = tmp_path / ".last_dep_check"
+            marker.write_text("")
+            t = time.time() - (marker_age_days * 86400)
+            os.utime(str(marker), (t, t))
+        return run_bash_hook(
             "check_dep_freshness.sh",
             {},
             env={**env, "DEP_CHECK_MAX_DAYS": "30"},
             cwd=str(tmp_path),
         )
 
-        assert "WARNING" in stderr, "Hook should warn when deps are stale"
+    def test_stale_marker_warns_via_stdout_not_stderr(self, fake_tool_env, tmp_path):
+        """Stale marker → warning delivered as a stdout systemMessage.
 
-    def test_no_warning_when_fresh(self, fake_tool_env, tmp_path):
-        """When .last_dep_check is recent, no warning should appear."""
-        env, log_file = fake_tool_env
-        _init_git_repo(tmp_path)
-
-        (tmp_path / "uv.lock").write_text("")
-
-        # Create a fresh .last_dep_check (now)
-        marker = tmp_path / ".last_dep_check"
-        marker.write_text("")
-
-        rc, stderr, stdout = run_bash_hook(
-            "check_dep_freshness.sh",
-            {},
-            env={**env, "DEP_CHECK_MAX_DAYS": "30"},
-            cwd=str(tmp_path),
+        This is the regression guard for wiring test 1.1: the warning MUST be on
+        stdout (the working SessionStart channel), and MUST NOT be confined to
+        stderr (the old, invisible channel).
+        """
+        env, _ = fake_tool_env
+        rc, stderr, stdout = self._run_stale_check(
+            tmp_path, env, marker_age_days=60, uvlock_age_days=1
         )
 
-        assert "WARNING" not in stderr, "Hook should not warn when deps are fresh"
+        assert rc == 0
+        payload = json.loads(stdout)  # stdout must be valid SessionStart JSON
+        message = payload["systemMessage"]
+        assert "depend" in message.lower(), (
+            f"systemMessage should mention dependencies, got: {message!r}"
+        )
+        # Old behavior gone: the user-facing warning is not stranded on stderr.
+        assert message not in stderr
 
-    def test_handles_missing_marker(self, fake_tool_env, tmp_path):
-        """Without .last_dep_check, falls back to uv.lock mtime."""
-        env, log_file = fake_tool_env
-        _init_git_repo(tmp_path)
-
-        # Create uv.lock with old mtime — no .last_dep_check exists
-        lock = tmp_path / "uv.lock"
-        lock.write_text("")
-        old_time = time.time() - (60 * 86400)
-        os.utime(str(lock), (old_time, old_time))
-
-        rc, stderr, stdout = run_bash_hook(
-            "check_dep_freshness.sh",
-            {},
-            env={**env, "DEP_CHECK_MAX_DAYS": "30"},
-            cwd=str(tmp_path),
+    def test_fresh_marker_produces_no_warning(self, fake_tool_env, tmp_path):
+        """Recent marker → no warning emitted on stdout at all."""
+        env, _ = fake_tool_env
+        rc, stderr, stdout = self._run_stale_check(
+            tmp_path, env, marker_age_days=0, uvlock_age_days=1
         )
 
-        # Should warn because uv.lock (the fallback) is old
-        assert "WARNING" in stderr, "Hook should warn using uv.lock mtime as fallback"
+        assert rc == 0
+        assert stdout.strip() == "", (
+            f"Fresh deps should emit no stdout warning, got: {stdout!r}"
+        )
+
+    def test_missing_marker_stale_uvlock_warns_via_fallback(
+        self, fake_tool_env, tmp_path
+    ):
+        """No marker + old uv.lock → warning, using uv.lock mtime as fallback."""
+        env, _ = fake_tool_env
+        rc, stderr, stdout = self._run_stale_check(
+            tmp_path, env, marker_age_days=None, uvlock_age_days=60
+        )
+
+        assert rc == 0
+        payload = json.loads(stdout)
+        assert "depend" in payload["systemMessage"].lower()
+
+    def test_missing_marker_fresh_uvlock_no_crash_no_warning(
+        self, fake_tool_env, tmp_path
+    ):
+        """No marker + fresh uv.lock → graceful: exit 0, no false warning.
+
+        This is wiring test 1.3: a missing marker must fall back to uv.lock
+        without crashing or emitting a spurious staleness warning.
+        """
+        env, _ = fake_tool_env
+        rc, stderr, stdout = self._run_stale_check(
+            tmp_path, env, marker_age_days=None, uvlock_age_days=1
+        )
+
+        assert rc == 0, "Missing marker must not crash the hook"
+        assert stdout.strip() == "", (
+            f"Fresh uv.lock fallback should emit no warning, got: {stdout!r}"
+        )
+
+    def test_no_uvlock_exits_silently(self, fake_tool_env, tmp_path):
+        """No uv.lock at all → hook is a no-op (only applies to uv projects)."""
+        env, _ = fake_tool_env
+        rc, stderr, stdout = self._run_stale_check(
+            tmp_path, env, marker_age_days=None, uvlock_age_days=None
+        )
+
+        assert rc == 0
+        assert stdout.strip() == "", "Non-uv projects should get no output"
 
 
 # ── Hypothesis property tests ──────────────────────────────────────────────

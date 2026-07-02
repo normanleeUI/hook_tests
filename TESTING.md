@@ -90,12 +90,12 @@ rm -f .hook_state/pip_audit/report.json 2>/dev/null
 ./scripts/observe.sh --reset
 ```
 
-- [ ] verify_prerequisites.sh passes
-- [ ] staged_secret_test.py is staged in git
-- [ ] .last_dep_check set to 60 days ago
-- [ ] .env, .env.local, .env.production exist
-- [ ] .hook_state/pip_audit/report.json cleared
-- [ ] observation state reset
+- [x] verify_prerequisites.sh passes
+- [x] staged_secret_test.py is staged in git
+- [x] .last_dep_check set to 60 days ago
+- [x] .env, .env.local, .env.production exist
+- [x] .hook_state/pip_audit/report.json cleared
+- [x] observation state reset
 
 ---
 
@@ -112,41 +112,43 @@ Each test requires a fresh Claude Code session. Do these first — they're the s
 > Pre-condition: `.last_dep_check` set to 60 days ago (Batch 0).
 > Start a new Claude Code session in `hook_tests/`.
 
-- [ ] Claude mentions stale dependencies in first response
-- [ ] `./scripts/observe.sh check_dep_freshness` — hook FIRED
+- [x] Claude mentions stale dependencies in first response
+- [x] `./scripts/observe.sh check_dep_freshness` — hook FIRED
 
 **Test 1.2 — fresh deps**
 > Run in normal terminal: `touch .last_dep_check`
 > Start a new Claude Code session.
 
-- [ ] No staleness warning in Claude's first response
-- [ ] `./scripts/observe.sh check_dep_freshness` — hook FIRED (exited 0)
+- [x] No staleness warning in Claude's first response
+- [x] `./scripts/observe.sh check_dep_freshness` — hook FIRED (exited 0)
 
 **Test 1.3 — missing marker file**
 > Run in normal terminal: `rm -f .last_dep_check`
 > Start a new Claude Code session.
 
-- [ ] No crash — hook handles gracefully
-- [ ] `./scripts/observe.sh check_dep_freshness` — hook FIRED
+- [x] No crash — hook handles gracefully
+- [x] `./scripts/observe.sh check_dep_freshness` — hook FIRED
 
 ### project_health_check.py
 
 > **Wiring**: SessionStart, no matcher.
 > **Observe via**: SESSION-STDOUT.
 
-**Test 1.4 — normal session**
-> Start a new Claude Code session in `hook_tests/`.
+**Test 1.4 — normal session (healthy project)**
+> Start a new Claude Code session in `hook_tests/`. This repo passes all
+> health checks, so the hook should stay SILENT (it only surfaces gaps —
+> missing setup items, a CONTRIBUTING.md, or git stash/unpushed warnings).
 
-- [ ] Claude's first response reflects project health awareness
-- [ ] `./scripts/observe.sh project_health_check` — hook FIRED
+- [x] No project-health output in Claude's first response (correct — project is healthy)
+- [x] `./scripts/observe.sh project_health_check` — hook FIRED (exited 0)
 
 **Test 1.5 — missing README**
 > Run in normal terminal: `mv README.md README.md.bak`
 > Start a new Claude Code session.
 
-- [ ] Health check flags missing README
-- [ ] `./scripts/observe.sh project_health_check` — hook FIRED
-- [ ] Run in normal terminal: `mv README.md.bak README.md` (restore)
+- [x] Health check flags missing README
+- [x] `./scripts/observe.sh project_health_check` — hook FIRED
+- [x] Run in normal terminal: `mv README.md.bak README.md` (restore)
 
 ### git_pull_on_start.sh
 
@@ -156,15 +158,15 @@ Each test requires a fresh Claude Code session. Do these first — they're the s
 **Test 1.6 — clean repo with remote**
 > Start a new Claude Code session.
 
-- [ ] `./scripts/observe.sh git_pull_on_start` — hook FIRED
+- [x] `./scripts/observe.sh git_pull_on_start` — hook FIRED
 
 **Test 1.7 — uncommitted changes**
 > Run in normal terminal: `echo "# temp" >> README.md`
 > Start a new Claude Code session.
 
-- [ ] Hook skips pull (doesn't clobber uncommitted work)
-- [ ] `./scripts/observe.sh git_pull_on_start` — hook FIRED
-- [ ] Run in normal terminal: `git checkout -- README.md` (restore)
+- [x] Hook skips pull (doesn't clobber uncommitted work)
+- [x] `./scripts/observe.sh git_pull_on_start` — hook FIRED
+- [x] Run in normal terminal: `git checkout -- README.md` (restore)
 
 ### Batch 1 reset
 

@@ -99,6 +99,13 @@ else
     matches=()
     while IFS= read -r line; do
         ts="${line%% *}"
+        # Scope to this project: the shared /tmp log is written by every
+        # concurrent Claude session, so drop lines whose cwd= tag points at a
+        # different project. Lines without a cwd= tag (older shell hooks) are
+        # kept, since they can't be attributed either way.
+        if [[ "$line" == *"cwd="* && "$line" != *"cwd=$PROJECT_ROOT"* ]]; then
+            continue
+        fi
         # String comparison works for HH:MM:SS.mmm since it's lexicographic
         if [[ "$ts" > "$since" || "$ts" == "$since" ]]; then
             if $SHOW_ALL; then

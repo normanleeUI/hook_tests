@@ -54,13 +54,15 @@ EXPECTED = [
     ("C", "2.17d", "scan_secrets_on_commit", "pip install requests", "NOT_FIRED"),
     ("C", "2.18a", "block_git_add_env", "git add .env", "BLOCK"),
     ("C", "2.18b", "block_bare_pip", "git add .env", "ALLOW"),
-    ("C", "2.19a", "scan_secrets_on_commit", "git commit -m 'test'", "FIRED"),
+    # With the realistic fixture staged (Batch 0), scan_secrets now BLOCKS the
+    # commit; the file stays staged after each block, so all three commits block.
+    ("C", "2.19a", "scan_secrets_on_commit", "git commit -m 'test'", "BLOCK"),
     ("C", "2.19b", "pip_audit_guard", "git commit -m 'test'", "ALLOW"),
-    ("C", "2.20", "scan_secrets_on_commit", "git commit -m 'test wiring'", "FIRED"),
+    ("C", "2.20", "scan_secrets_on_commit", "git commit -m 'test wiring'", "BLOCK"),
     ("C", "2.21", "scan_secrets_on_commit", "git status", "NOT_FIRED"),
     ("C", "2.22", "block_git_add_env", "git add .", "BLOCK"),
     ("C", "2.23", "block_git_add_env", "echo hello", "NOT_FIRED"),
-    ("C", "2.24", "scan_secrets_on_commit", "git commit -m 'secret test'", "FIRED"),
+    ("C", "2.24", "scan_secrets_on_commit", "git commit -m 'secret test'", "BLOCK"),
 ]
 
 # cmd= is always the last field, so grab everything after it and drop the

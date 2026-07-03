@@ -21,6 +21,7 @@ Run in your normal terminal, from `hook_tests/`:
 
 ```bash
 ./scripts/verify_prerequisites.sh          # environment sane
+cp fixtures/staged_secret.py src/staged_secret_test.py   # realistic fake keys
 git add src/staged_secret_test.py          # scan_secrets precondition (Batch 0)
 rm -f .hook_state/pip_audit/report.json     # clean pip_audit state (see 2.11 note)
 ./scripts/observe.sh --reset               # clear the debug log for a fresh run
@@ -94,9 +95,10 @@ Expected: 1 BLOCK, 2 ALLOW (runs), 3 ALLOW, 4–5 BLOCK, 6 ALLOW, and for cmd 7
 
 ## Group C safety guard — RUN THIS FIRST (normal terminal)
 
-Group C issues `git commit` three times. The `scan_secrets_on_commit` hook has a
-known bug (`git diff --cached` is empty in PreToolUse), so it may **not** block —
-meaning a commit can actually land. Fence it so nothing persists:
+Group C issues `git commit` three times with the fake-secret fixture staged.
+`scan_secrets_on_commit` **blocks** all three (verified 2026-07-02), so no commit
+should land. This guard is belt-and-suspenders — it undoes any commit that slips
+through if the fixture or hook ever regresses:
 
 ```bash
 git rev-parse HEAD > .batch2_head          # remember where HEAD is
@@ -118,9 +120,9 @@ Paste the contract, then:
 ```
 
 Expected: the co-firing / `if:`-filter table in `check_batch2.py` (group C).
-`scan_secrets_on_commit` FIRES on the commits (decision likely `ALLOW` — the
-known bug); it does NOT fire on `git status`. `block_git_add_env` fires on
-`git add .` but NOT on `echo hello`.
+`scan_secrets_on_commit` BLOCKS the commits (the fixture's key is staged); it
+does NOT fire on `git status`. `block_git_add_env` fires on `git add .` but NOT
+on `echo hello`.
 
 ---
 

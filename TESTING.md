@@ -8,6 +8,13 @@ invoke the hook, and does the output reach the user or model through a working c
 Tests are batched by interaction pattern to minimize context-switching. Work through
 the batches in order — some have dependencies on earlier results.
 
+**Working style: log-and-continue.** When a test fails, record the finding and keep
+going through the batch rather than stopping to fix each bug and re-run. Fixing
+one-at-a-time forces a session restart per fix (the slow path) and can mask other
+failures. Do a full pass first, then fix the surfaced bugs as a batch and add
+regression tests. Note that hook fixes themselves live in `~/.claude/hooks/` (outside
+this repo), so capture them in a commit message or changelog for provenance.
+
 **Tools you'll use:**
 - `./scripts/verify_prerequisites.sh` — pre-flight environment check
 - `./scripts/observe.sh <hook> [file]` — post-test observation (debug log + inline comments + state files)
@@ -58,7 +65,15 @@ Empirically validated output channels (see `probes/PROBE_RESULTS_PHASE2.md`):
 
 ## Known Issues
 
-- [ ] **`scan_secrets_on_commit` logic bug**: Hook fires but `git diff --cached` returns empty in PreToolUse context (commit hasn't happened yet). Fundamental design issue, not a channel problem. Channel redesign did not address it.
+- [x] **~~`scan_secrets_on_commit` logic bug~~ — RESOLVED (was a misdiagnosis)**:
+  Previously believed `git diff --cached` returned empty in PreToolUse context.
+  It does not. Verified end-to-end (2026-07-02): staging a realistic-length
+  fake key and running `git commit` in a live session BLOCKS correctly, and an
+  isolated run confirms `git diff --cached` sees staged content. The real cause
+  of the earlier "fails open" observation was the Batch 0 fixture using
+  `sk-ant-FAKE-key-here` — only 13 chars after the prefix, below the pattern's
+  20-char floor, so it could never match. Fixed by staging the real fixture
+  (`fixtures/staged_secret.py`) instead. The hook itself was always correct.
 
 ---
 
@@ -72,8 +87,12 @@ cd ~/projects/hook_tests
 # 1. Verify environment
 ./scripts/verify_prerequisites.sh
 
-# 2. Stage a file with a fake secret for scan_secrets_on_commit test (Batch 2)
-echo 'API_KEY = "sk-ant-FAKE-key-here"' > src/staged_secret_test.py
+# 2. Stage a file with a fake secret for scan_secrets_on_commit test (Batch 2).
+# Copy the committed fixture (fixtures/staged_secret.py) rather than echoing a
+# literal: its keys are real *length* (sk-ant-api03-… ≥20 chars) so the hook
+# actually matches, and no matchable literal lands in this doc (which would
+# make committing TESTING.md itself trip the hook).
+cp fixtures/staged_secret.py src/staged_secret_test.py
 git add src/staged_secret_test.py
 
 # 3. Set stale dep marker for check_dep_freshness test (Batch 1)

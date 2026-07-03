@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Git-native pre-commit backstop: block commits that add secrets or .env files.
+
+Why this exists (option D): the Claude Code PreToolUse hook
+`~/.claude/hooks/scan_secrets_on_commit.py` is scoped with `if: Bash(git commit*)`.
+That prefix-matcher is bypassable — `git -C . commit ...` does not match
+`git commit*`, so the scan is skipped and secrets can land in history. A git
+pre-commit hook fires at actual commit time regardless of HOW the commit is
+invoked, so it closes that gap. This file is the real guarantee; the Claude
+Code hook stays as the early/UX block.
+
+SELF-CONTAINED by design — no imports from ~/.claude/hooks, so the repo stays
+reproducible for anyone who clones it and runs scripts/install_hooks.sh.
+
+PATTERNS below are copied VERBATIM from ~/.claude/hooks/scan_secrets_on_commit.py
+(source of truth). If that dict changes, re-sync this copy.
+"""
+
+import re
+import subprocess
+import sys
+
+# --- copied verbatim from ~/.claude/hooks/scan_secrets_on_commit.py ---
+PATTERNS: dict[str, str] = {
+    "Anthropic API key": r"sk-ant-[A-Za-z0-9_-]{20,}",
+    "OpenAI API key": r"sk-(?!ant-)[A-Za-z0-9]{20,}",
+    "AWS access key ID": r"AKIA[0-9A-Z]{16}",
+    "GitHub personal access token (classic)": r"ghp_[A-Za-z0-9]{36}",
+    "GitHub fine-grained token": r"github_pat_[A-Za-z0-9_]{82}",
+    "Slack token": r"xox[baprs]-[A-Za-z0-9-]{10,}",
+    "Google API key": r"AIza[0-9A-Za-z_-]{35}",
+    "Generic private key block": r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----",
+}
+# --- end verbatim copy ---
+
+# Non-template .env basenames are secrets; template files are documentation.
+ENV_RE = re.compile(r"^\.env(?:\.[a-zA-Z0-9._-]+)?$")
+TEMPLATE_RE = re.compile(r"^\.env\.(example|sample|template|dist)$")
+
+
+def _git(args: list[str]) -> str:
+    """Run a git command, failing closed (exit 1) if git itself errors.
+
+    We cannot verify staged changes are secret-free if git fails, so blocking
+    is the safe default — never let an unverifiable commit through.
+    """
+    result = subprocess.run(
+        ["git", *args], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        print(
+            f"[pre-commit] BLOCKED — `git {' '.join(args)}` failed (returncode "
+            f"{result.returncode}); failing closed because staged changes cannot "
+            f"be verified.\n{result.stderr}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return result.stdout
+
+
+def _scan_added_lines() -> None:
+    """Scan added ('+') diff lines for known secret patterns."""
+    # -U0 minimizes context; we only care about additions.
+    diff = _git(["diff", "--cached", "-U0"])
+    added = []
+    for line in diff.splitlines():
+        if (
+            line.startswith("diff ")
+            or line.startswith("---")
+            or line.startswith("+++")
+            or line.startswith("@@")
+        ):
+            continue  # skip metadata so secret-like filenames don't false-positive
+        if line.startswith("+"):
+            added.append(line)
+    body = "\n".join(added)
+
+    for name, pattern in PATTERNS.items():
+        match = re.search(pattern, body)
+        if not match:
+            continue
+        snippet = match.group(0)
+        shown = snippet[:12] + "..." if len(snippet) > 12 else snippet
+        print(
+            f"[pre-commit] BLOCKED — possible {name} in staged changes.\n"
+            f"  Pattern:  {pattern}\n"
+            f"  Snippet:  {shown}  (truncated; full secret not printed)\n"
+            f"  Fix:      move the value into a .gitignored .env file and load it\n"
+            f"            at runtime via os.environ / python-dotenv, then re-stage.\n"
+            f"  Do NOT bypass with --no-verify.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def _scan_env_files() -> None:
+    """Reject staged (added/modified) non-template .env files by basename."""
+    names = _git(["diff", "--cached", "--name-only", "--diff-filter=AM"])
+    for path in names.splitlines():
+        basename = path.rsplit("/", 1)[-1]
+        if ENV_RE.match(basename) and not TEMPLATE_RE.match(basename):
+            print(
+                f"[pre-commit] BLOCKED — staged .env file {path!r}.\n"
+                f"  .env files hold secrets and must never be committed.\n"
+                f"  Fix:  git restore --staged {path}   (and add it to .gitignore)\n"
+                f"  Template files (.env.example/.sample/.template/.dist) are allowed.\n"
+                f"  Do NOT bypass with --no-verify.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
+def main() -> None:
+    _scan_env_files()
+    _scan_added_lines()
+    print("[pre-commit] OK — no secrets or .env files in staged changes.")
+
+
+if __name__ == "__main__":
+    main()

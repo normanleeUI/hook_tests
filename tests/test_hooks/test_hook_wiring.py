@@ -62,6 +62,12 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Bash",
         "if_condition": None,
     },
+    "block_no_verify.py": {
+        "event": "PreToolUse",
+        "interpreter": "python3",
+        "matcher": "Bash",
+        "if_condition": None,
+    },
     "scan_secrets_on_commit.py": {
         "event": "PreToolUse",
         "interpreter": "python3",

@@ -48,18 +48,50 @@ Empirically validated output channels (see `probes/PROBE_RESULTS_PHASE2.md`):
 
 ## Reference: Current Hook Wiring
 
-16 active hooks across 7 groups:
+17 active hooks across 7 groups:
 
 | Event | Matcher | Hooks | Strategy |
 |-------|---------|-------|----------|
 | SessionStart | (none) | project_health_check, git_pull_on_start, check_dep_freshness | stdout to model |
 | PreToolUse | Read | block_read_env | D (dual-wiring) |
-| PreToolUse | Bash | block_read_env, block_bare_pip, scan_secrets_on_commit (`if: git commit*`), block_git_add_env (`if: git add*`), pip_audit_guard | exit 2 blocks |
+| PreToolUse | Bash | block_read_env, block_no_verify, block_bare_pip, scan_secrets_on_commit (`if: git commit*`), block_git_add_env (`if: git add*`), pip_audit_guard | exit 2 blocks |
 | PreToolUse | Edit\|Write | check_dependency_pins, block_suppressions, block_glob_deny_rules | A (promotion) |
 | PostToolUse | Edit\|Write | ruff_format | SIDE-EFFECT (reformat) |
 | PostToolUse | Bash | pip_audit_check | C (state-file) |
 | PostToolUse | WebFetch\|mcp__.* | scan_prompt_injection | MODEL-CONTEXT |
 | Stop | (none) | ruff_lint, batch_checks (pyright, bandit, semgrep, docstrings, seeds) | SIDE-EFFECT + inline injection |
+
+---
+
+## Git-native secret backstop (`.githooks/pre-commit`)
+
+`scan_secrets_on_commit.py` is scoped `if: Bash(git commit*)`, which
+`git -C . commit ...` bypasses — so a secret can reach `git commit` without
+the Claude Code scan running. Option D closes this: a git-native `pre-commit`
+hook (`.githooks/pre-commit`) fires at real commit time no matter how the
+commit is invoked. It scans the staged diff for the same secret patterns and
+also rejects any staged non-template `.env` file. It fails **closed** (blocks)
+if `git diff` errors.
+
+Install it (idempotent):
+
+```bash
+bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-commit
+```
+
+- **`--no-verify` is blocked at the Claude Code layer**, not by git: git
+  cannot stop a hook-skipping flag it is told to honor. `block_no_verify.py`
+  (PreToolUse, Bash, no `if:`) exits 2 on any command containing `--no-verify`,
+  including `git -C . commit --no-verify`.
+- **CAVEAT — absolute `core.hooksPath` pin breaks on repo move**: Claude Code's
+  worktree feature writes an *absolute* `core.hooksPath = <repo>/.git/hooks`
+  into `.git/config`. The installer targets exactly that path and deliberately
+  does **not** set its own `core.hooksPath` (Claude Code would overwrite it). If
+  the repo is ever moved, the absolute pin goes stale — re-point it and re-run
+  the installer from the new location.
+- Tests: `tests/test_hooks/test_pre_commit_gate.py` (real `git commit` in a
+  temp repo, including the `git -C` bypass) and
+  `tests/test_hooks/test_block_no_verify.py`.
 
 ---
 

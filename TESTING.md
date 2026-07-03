@@ -300,14 +300,16 @@ Phrase each as: "run `<command>`"
 - [x] 2.22: run `git add .` — block_git_add_env FIRES → `./scripts/observe.sh block_git_add_env`
 - [x] 2.23: run `echo hello` — block_git_add_env NOT FIRED → `./scripts/observe.sh block_git_add_env`
 
-### scan_secrets_on_commit — logic bug investigation
+### scan_secrets_on_commit — resolved (fixture problem, not a hook bug)
 
 > **Wiring**: PreToolUse, matcher=Bash, `if: Bash(git commit*)`.
-> **Known bug**: `git diff --cached` sees nothing in PreToolUse context.
+> **Resolved (2026-07-02)**: the earlier "fails open" was the Batch 0 fixture
+> using a too-short fake key, not a `git diff --cached` bug — see the Known
+> Issues note above. With the real-length fixture staged, the hook BLOCKS
+> correctly. The `if:` prefix-matcher bypass (`git -C . commit`) is closed
+> separately by the git-native pre-commit backstop.
 
-- [x] 2.24: run `git commit -m 'secret test'` → `./scripts/observe.sh scan_secrets_on_commit`
-  - Hook fires but may NOT block (known bug)
-  - Check debug log for what `git diff --cached` returned
+- [x] 2.24: run `git commit -m 'secret test'` — BLOCKED (real-length fixture staged) → `./scripts/observe.sh scan_secrets_on_commit`
 
 ```bash
 # Clean up staged secret test file:

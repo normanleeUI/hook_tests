@@ -594,16 +594,25 @@ echo "Testing complete — review checkboxes above for results."
 
 ## Follow-up: Secret Detection False Positives
 
-The `scan_secrets_on_commit` hook fires on patterns like `sk-ant-FAKE-...` in
-documentation and test fixtures, even though these are clearly not real secrets.
-This came up while committing this very file — the Batch 0 prep instructions
-contained a dummy key string that triggered the hook.
+**Correction (2026-07-02):** an earlier version of this note claimed the hook
+fires on short dummy strings like `sk-ant-FAKE-...`. It does not — the Anthropic
+pattern requires 20+ chars after the prefix, and `sk-ant-FAKE-key-here` has only
+13. That claim predated the `{20,}` tightening and is no longer accurate.
 
-**After completing the TESTING.md playbook**, revisit the secret detection regex
-to determine whether it can be tightened without introducing false negatives.
-Possible approaches:
-- Minimum entropy or length threshold (real keys have high randomness)
-- Allowlist for paths like `TESTING.md`, `fixtures/`, `prompts/`
-- Require a minimum number of non-repeating characters after the prefix
-- Context-aware scanning (skip strings inside markdown code fences or comments
-  that contain "FAKE", "TEST", "EXAMPLE", "PLACEHOLDER")
+The real residual false positive is **committed fixture files that contain
+intentionally-fake but pattern-matching keys.** `fixtures/staged_secret.py`
+holds `sk-ant-api03-…` (≥20 chars, matches by design), so editing and then
+committing *that file* is blocked by the hook — it can't tell a deliberate test
+fixture from a real leak. (The playbook itself dodges this: Batch 0 copies the
+fixture into an untracked `src/staged_secret_test.py` that cleanup removes and
+never commits.)
+
+**If this becomes a friction point**, mitigations in rough order of preference:
+- **Inline allowlist marker** — skip lines carrying a sentinel comment such as
+  `# pragma: allowlist secret` (the detect-secrets convention). Precise, opt-in
+  per line, no path-based blind spots.
+- **Path allowlist** — skip `fixtures/` and `tests/`. Simplest, but a real
+  secret committed under those paths would pass; tolerable only because test
+  dirs should never hold live secrets.
+- Length/entropy thresholds do **not** help here — the fixture keys are
+  realistic length on purpose.

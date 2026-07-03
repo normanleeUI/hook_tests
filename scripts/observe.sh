@@ -26,7 +26,7 @@ fi
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-DEBUG_LOG='/tmp/hook_debug.log'
+DEBUG_LOG="${TMPDIR:-/tmp}/hook_debug.log"
 MARKER_FILE="${TMPDIR:-/tmp}/last_observe_ts"
 HOOK_STATE_DIR='.hook_state'
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -117,12 +117,15 @@ Paste the contract, then:
 6. git add .
 7. echo hello
 8. git commit -m 'secret test'
+9. git commit --no-verify -m x
+10. git commit -n -m x
 ```
 
 Expected: the co-firing / `if:`-filter table in `check_batch2.py` (group C).
 `scan_secrets_on_commit` BLOCKS the commits (the fixture's key is staged); it
 does NOT fire on `git status`. `block_git_add_env` fires on `git add .` but NOT
-on `echo hello`.
+on `echo hello`. `block_no_verify` (no `if:`, fires on every Bash) BLOCKS
+commands 9–10 — `--no-verify` and its short form `-n`.
 
 ---
 

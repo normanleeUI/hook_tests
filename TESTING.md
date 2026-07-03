@@ -241,18 +241,18 @@ Phrase each as: "run `<command>`"
 
 **Should BLOCK:**
 
-- [ ] 2.1: run `cat .env` — BLOCKED → `./scripts/observe.sh block_read_env`
-- [ ] 2.2: run `head -5 .env.production` — BLOCKED → `./scripts/observe.sh block_read_env`
-- [ ] 2.3: run `base64 .env` — BLOCKED → `./scripts/observe.sh block_read_env`
-- [ ] 2.4: run `source .env` — BLOCKED → `./scripts/observe.sh block_read_env`
-- [ ] 2.5: run `python3 -c 'open(".env").read()'` — BLOCKED → `./scripts/observe.sh block_read_env`
-- [ ] 2.6: run `echo hello && cat .env` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [x] 2.1: run `cat .env` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [x] 2.2: run `head -5 .env.production` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [x] 2.3: run `base64 .env` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [x] 2.4: run `source .env` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [x] 2.5: run `python3 -c 'open(".env").read()'` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [x] 2.6: run `echo hello && cat .env` — BLOCKED → `./scripts/observe.sh block_read_env`
 
 **Should ALLOW:**
 
-- [ ] 2.7: run `cat .env.example` — allowed → `./scripts/observe.sh block_read_env`
-- [ ] 2.8: run `cat .env.template` — allowed → `./scripts/observe.sh block_read_env`
-- [ ] 2.9: run `cat README.md` — allowed → `./scripts/observe.sh block_read_env`
+- [x] 2.7: run `cat .env.example` — allowed → `./scripts/observe.sh block_read_env`
+- [x] 2.8: run `cat .env.template` — allowed → `./scripts/observe.sh block_read_env`
+- [x] 2.9: run `cat README.md` — allowed → `./scripts/observe.sh block_read_env`
 
 ### block_bare_pip.py
 
@@ -260,9 +260,9 @@ Phrase each as: "run `<command>`"
 > **Observe via**: BLOCKED (exit 2, stderr visible).
 > Logic thoroughly tested by automated tests — manual test confirms wiring only.
 
-- [ ] 2.10: run `pip install requests` — BLOCKED → `./scripts/observe.sh block_bare_pip`
-- [ ] 2.11: run `uv pip install requests` — allowed → `./scripts/observe.sh block_bare_pip`
-- [ ] 2.12: run `git status` — allowed, hook fired → `./scripts/observe.sh block_bare_pip`
+- [x] 2.10: run `pip install requests` — BLOCKED → `./scripts/observe.sh block_bare_pip`
+- [x] 2.11: run `uv pip install requests` — allowed → `./scripts/observe.sh block_bare_pip`
+- [x] 2.12: run `git status` — allowed, hook fired → `./scripts/observe.sh block_bare_pip`
 
 ### block_git_add_env.py
 
@@ -270,24 +270,24 @@ Phrase each as: "run `<command>`"
 > **Observe via**: BLOCKED (exit 2, stderr visible).
 > Logic thoroughly tested by automated tests — manual test confirms wiring only.
 
-- [ ] 2.13: run `git add .env` — BLOCKED → `./scripts/observe.sh block_git_add_env`
-- [ ] 2.14: run `git add .` — BLOCKED → `./scripts/observe.sh block_git_add_env`
-- [ ] 2.15: run `git add src/clean_module.py` — allowed → `./scripts/observe.sh block_git_add_env`
-- [ ] 2.16: run `git status` — NOT FIRED (if: filters) → `./scripts/observe.sh block_git_add_env`
+- [x] 2.13: run `git add .env` — BLOCKED → `./scripts/observe.sh block_git_add_env`
+- [x] 2.14: run `git add .` — BLOCKED → `./scripts/observe.sh block_git_add_env`
+- [x] 2.15: run `git add src/clean_module.py` — allowed → `./scripts/observe.sh block_git_add_env`
+- [x] 2.16: run `git status` — NOT FIRED (if: filters) → `./scripts/observe.sh block_git_add_env`
 
 ### Cross-cutting: multiple Bash hooks share a matcher
 
 > Multiple PreToolUse Bash hooks fire on every Bash command (unless `if:` filters).
 > Focus on which OTHER hooks fired alongside the primary one.
 
-- [ ] 2.17: run `pip install requests` → `./scripts/observe.sh --all`
+- [x] 2.17: run `pip install requests` → `./scripts/observe.sh --all`
   - block_bare_pip BLOCKS
   - block_read_env (Bash) also fired? (yes — no `if:`)
   - scan_secrets_on_commit fired? (no — `if: Bash(git commit*)` doesn't match)
-- [ ] 2.18: run `git add .env` → `./scripts/observe.sh --all`
+- [x] 2.18: run `git add .env` → `./scripts/observe.sh --all`
   - block_git_add_env BLOCKS
   - block_bare_pip also fired? (yes — no `if:`)
-- [ ] 2.19: run `git commit -m 'test'` → `./scripts/observe.sh --all`
+- [x] 2.19: run `git commit -m 'test'` → `./scripts/observe.sh --all`
   - scan_secrets_on_commit FIRES
   - pip_audit_guard also fired? (yes — no `if:`)
 
@@ -295,17 +295,17 @@ Phrase each as: "run `<command>`"
 
 > P13 confirmed single-pattern `if:` conditions work. `|` OR syntax does NOT.
 
-- [ ] 2.20: run `git commit -m 'test wiring'` — scan_secrets FIRES → `./scripts/observe.sh scan_secrets_on_commit`
-- [ ] 2.21: run `git status` — scan_secrets NOT FIRED → `./scripts/observe.sh scan_secrets_on_commit`
-- [ ] 2.22: run `git add .` — block_git_add_env FIRES → `./scripts/observe.sh block_git_add_env`
-- [ ] 2.23: run `echo hello` — block_git_add_env NOT FIRED → `./scripts/observe.sh block_git_add_env`
+- [x] 2.20: run `git commit -m 'test wiring'` — scan_secrets FIRES → `./scripts/observe.sh scan_secrets_on_commit`
+- [x] 2.21: run `git status` — scan_secrets NOT FIRED → `./scripts/observe.sh scan_secrets_on_commit`
+- [x] 2.22: run `git add .` — block_git_add_env FIRES → `./scripts/observe.sh block_git_add_env`
+- [x] 2.23: run `echo hello` — block_git_add_env NOT FIRED → `./scripts/observe.sh block_git_add_env`
 
 ### scan_secrets_on_commit — logic bug investigation
 
 > **Wiring**: PreToolUse, matcher=Bash, `if: Bash(git commit*)`.
 > **Known bug**: `git diff --cached` sees nothing in PreToolUse context.
 
-- [ ] 2.24: run `git commit -m 'secret test'` → `./scripts/observe.sh scan_secrets_on_commit`
+- [x] 2.24: run `git commit -m 'secret test'` → `./scripts/observe.sh scan_secrets_on_commit`
   - Hook fires but may NOT block (known bug)
   - Check debug log for what `git diff --cached` returned
 
@@ -315,6 +315,19 @@ git reset HEAD src/staged_secret_test.py 2>/dev/null
 rm -f src/staged_secret_test.py
 ./scripts/observe.sh --reset
 ```
+
+### block_no_verify.py  *(added 2026-07-03 — new hook; short follow-up pass, run after the batch above)*
+
+> **Wiring**: PreToolUse, matcher=Bash, no `if:`. Fires on **every** Bash command,
+> so it also co-fires in the `--all` observations above (it's in the wiring table).
+> **Observe via**: BLOCKED (exit 2, stderr visible).
+> Blocks hook-skipping flags so `--no-verify` / `git commit -n` can't bypass the
+> git-native pre-commit secret backstop. Safe to run live — it blocks, so no
+> commit lands.
+
+- [ ] 2.25: run `git commit --no-verify -m x` — BLOCKED → `./scripts/observe.sh block_no_verify`
+- [ ] 2.26: run `git commit -n -m x` — BLOCKED (`-n` is the short form) → `./scripts/observe.sh block_no_verify`
+- [ ] 2.27: run `echo hello` — allowed, hook fired → `./scripts/observe.sh block_no_verify`
 
 ---
 

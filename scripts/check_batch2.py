@@ -63,6 +63,9 @@ EXPECTED = [
     ("C", "2.22", "block_git_add_env", "git add .", "BLOCK"),
     ("C", "2.23", "block_git_add_env", "echo hello", "NOT_FIRED"),
     ("C", "2.24", "scan_secrets_on_commit", "git commit -m 'secret test'", "BLOCK"),
+    # block_no_verify (no if:, fires on every Bash) — blocks hook-skipping flags.
+    ("C", "2.25", "block_no_verify", "git commit --no-verify -m x", "BLOCK"),
+    ("C", "2.26", "block_no_verify", "git commit -n -m x", "BLOCK"),
 ]
 
 # cmd= is always the last field, so grab everything after it and drop the

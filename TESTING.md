@@ -42,7 +42,10 @@ Empirically validated output channels (see `probes/PROBE_RESULTS_PHASE2.md`):
 - Read matcher exit-2 blocks show only a red dot (stderr not rendered), but the block works
 - PostToolUse exit 2 is **cosmetic** — the edit already happened; only informs Claude
 - PostToolUse hooks in the same group run **in parallel** — currently only ruff_format is in the Edit|Write group, so this is not a concern; batch_checks.sh runs tools sequentially
-- `if:` conditions work for single patterns; `|` OR syntax does NOT work
+- ~~`if:` conditions work for single patterns~~; `|` OR syntax does NOT work.
+  **⚠️ Regressed:** Claude Code 2.1.201 ignores the handler-level `if:` field
+  entirely (see Known Issues, 2026-07-13). Scope is now enforced by in-body
+  guards in the affected hooks, not the settings gate.
 
 ---
 
@@ -97,23 +100,31 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
 
 ## Known Issues
 
-- [ ] **🔴 `if:` hook gating regressed to a no-op (discovered 2026-07-13)**:
-  In the current Claude Code harness, the `if:` condition field is **ignored** —
-  hooks fire on every command their `matcher` matches, regardless of the `if:`
-  pattern. Confirmed from the name-column debug log (`cwd=hook_tests`): both
+- [x] **🟢 `if:` hook gating regressed to a no-op — FIXED via in-body guards (2026-07-13)**:
+  **Claude Code 2.1.201 ignores the handler-level `if:` condition field entirely**
+  (fails open), so `if:`-gated hooks fired on every command their `matcher`
+  matched. Confirmed from the name-column debug log (`cwd=hook_tests`): both
   `block_git_add_env` (`if: Bash(git add*)`) and `scan_secrets_on_commit`
-  (`if: Bash(git commit*)`) FIRED on plain `echo`/`cp`/`cd` commands containing
-  no `git` at all. This **contradicts** the "`if:` conditions work for single
-  patterns" note (Observation Guide + probe P13) and **invalidates** the
-  filtering assertions in tests **2.16, 2.21, 2.23** (they expect the gated hook
-  to NOT fire on `git status` / `echo hello`; it now fires and merely ALLOWs, or
-  BLOCKs if a bare non-template `.env` token is present). Likely fallout from the
-  2026-06 harness pass. `scan_secrets`' over-firing is benign (ALLOWs when no
-  secret is staged); `block_git_add_env`'s is visible — it now blocks any Bash
-  command containing a bare `.env` token, e.g. a `for f in .env …` loop.
-  **Not yet fixed** — logged per the log-and-continue playbook; needs a dedicated
-  pass (re-point `if:` to the current harness mechanism, or push the git-add /
-  git-commit scoping into the hook bodies since the settings gate is dead).
+  (`if: Bash(git commit*)`) FIRED on plain `echo`/`cp`/`cd` commands with no
+  `git` at all. The `if:` syntax in `settings.json` is actually correct per
+  current docs — the build simply no longer honors it (P13 proved it worked in
+  June, so genuine regression). `block_git_add_env`'s over-firing was *visible*:
+  with no internal git-add check, it blocked any Bash command containing a bare
+  non-template `.env` token. `scan_secrets`' was benign but wasteful (ran
+  `git diff --cached` on every Bash command).
+  **Fix (root-cause, harness-independent)**: pushed the scope guard *into* the
+  hook bodies — `block_git_add_env.py` now early-exits unless the command is a
+  real `git add` (matches `git add`, `git -C <p> add`, `git -c k=v add`);
+  `scan_secrets_on_commit.py` now reads the command off stdin and early-exits
+  unless it's a `git commit`. The `if:` fields are kept as cheap redundancy for
+  when a future build honors them again. Verified: 14-case guard matrix + pytest
+  regression suite (`tests/test_hooks/`). Hook edits live in `~/.claude/hooks/`
+  (outside this repo) — provenance in the accompanying commit. Tests 2.16 / 2.21
+  / 2.23 updated: their intent (hook inert on non-matching commands) holds, but
+  the mechanism is now the in-body guard, so the observable is FIRED-but-ALLOW,
+  not NOT-FIRED. **Follow-up**: the Observation Guide line "`if:` conditions work
+  for single patterns" (still shown for historical P13 context) is now false for
+  2.1.201 — left annotated rather than deleted.
 
 - [x] **~~`scan_secrets_on_commit` logic bug~~ — RESOLVED (was a misdiagnosis)**:
   Previously believed `git diff --cached` returned empty in PreToolUse context.
@@ -284,14 +295,17 @@ Phrase each as: "run `<command>`"
 
 ### block_git_add_env.py
 
-> **Wiring**: PreToolUse, matcher=Bash, `if: Bash(git add*)`.
-> **Observe via**: BLOCKED (exit 2, stderr visible).
-> Logic thoroughly tested by automated tests — manual test confirms wiring only.
+> **Wiring**: PreToolUse, matcher=Bash. The settings `if: Bash(git add*)` gate is
+> a **no-op** in Claude Code 2.1.201 (see Known Issues), so the git-add scope is
+> now enforced by an **in-body guard** in `block_git_add_env.py`. The harness
+> invokes the hook on every Bash command (it logs FIRED), but the guard makes it
+> inert (ALLOW) on anything that isn't a real `git add`.
+> **Observe via**: BLOCKED (exit 2, stderr visible) on a git-add of a `.env` file.
 
 - [x] 2.13: run `git add .env` — BLOCKED → `./scripts/observe.sh block_git_add_env`
 - [x] 2.14: run `git add .` — BLOCKED → `./scripts/observe.sh block_git_add_env`
 - [x] 2.15: run `git add src/clean_module.py` — allowed → `./scripts/observe.sh block_git_add_env`
-- [x] 2.16: run `git status` — NOT FIRED (if: filters) → `./scripts/observe.sh block_git_add_env`
+- [x] 2.16: run `git status` — FIRED but ALLOW (in-body guard skips non-git-add; `if:` no longer filters — see Known Issues) → `./scripts/observe.sh block_git_add_env`
 
 ### Cross-cutting: multiple Bash hooks share a matcher
 
@@ -301,7 +315,8 @@ Phrase each as: "run `<command>`"
 - [x] 2.17: run `pip install requests` → `./scripts/observe.sh --all`
   - block_bare_pip BLOCKS
   - block_read_env (Bash) also fired? (yes — no `if:`)
-  - scan_secrets_on_commit fired? (no — `if: Bash(git commit*)` doesn't match)
+  - scan_secrets_on_commit fired? (yes — harness invokes it since `if:` is a no-op;
+    but its in-body guard skips: ALLOW, no `git diff`. Pre-regression this was "no")
 - [x] 2.18: run `git add .env` → `./scripts/observe.sh --all`
   - block_git_add_env BLOCKS
   - block_bare_pip also fired? (yes — no `if:`)
@@ -309,18 +324,26 @@ Phrase each as: "run `<command>`"
   - scan_secrets_on_commit FIRES
   - pip_audit_guard also fired? (yes — no `if:`)
 
-### `if:` condition filtering
+### `if:` condition filtering — REGRESSED (see Known Issues)
 
-> P13 confirmed single-pattern `if:` conditions work. `|` OR syntax does NOT.
+> ⚠️ P13 once confirmed single-pattern `if:` worked, but Claude Code 2.1.201
+> **ignores the handler-level `if:` field entirely** (verified 2026-07-13). Scope
+> is now enforced by in-body guards in the two affected hooks. (`|` OR syntax
+> still does NOT work either.) The gated hooks are INVOKED on every Bash command
+> (they log FIRED) but their guards make them inert (ALLOW) outside their scope.
 
-- [x] 2.20: run `git commit -m 'test wiring'` — scan_secrets FIRES → `./scripts/observe.sh scan_secrets_on_commit`
-- [x] 2.21: run `git status` — scan_secrets NOT FIRED → `./scripts/observe.sh scan_secrets_on_commit`
-- [x] 2.22: run `git add .` — block_git_add_env FIRES → `./scripts/observe.sh block_git_add_env`
-- [x] 2.23: run `echo hello` — block_git_add_env NOT FIRED → `./scripts/observe.sh block_git_add_env`
+- [x] 2.20: run `git commit -m 'test wiring'` — scan_secrets FIRES and scans staged diff → `./scripts/observe.sh scan_secrets_on_commit`
+- [x] 2.21: run `git status` — scan_secrets FIRED but ALLOW (in-body guard skips; no `git diff`) → `./scripts/observe.sh scan_secrets_on_commit`
+- [x] 2.22: run `git add .` — block_git_add_env FIRES and BLOCKS (bulk add) → `./scripts/observe.sh block_git_add_env`
+- [x] 2.23: run `echo hello` — block_git_add_env FIRED but ALLOW (in-body guard skips) → `./scripts/observe.sh block_git_add_env`
 
 ### scan_secrets_on_commit — resolved (fixture problem, not a hook bug)
 
-> **Wiring**: PreToolUse, matcher=Bash, `if: Bash(git commit*)`.
+> **Wiring**: PreToolUse, matcher=Bash. The `if: Bash(git commit*)` gate is a
+> no-op in Claude Code 2.1.201 (see Known Issues); the git-commit scope is now
+> enforced by an in-body guard in `scan_secrets_on_commit.py` (which also now
+> reads the command off stdin, where before it scanned the staged diff on every
+> Bash call).
 > **Resolved (2026-07-02)**: the earlier "fails open" was the Batch 0 fixture
 > using a too-short fake key, not a `git diff --cached` bug — see the Known
 > Issues note above. With the real-length fixture staged, the hook BLOCKS
@@ -384,7 +407,6 @@ Phrase as: "read the file `<path>`"
 > (template allowlist) / `src/clean_module.py` → FIRED/ALLOW. The Bash `if:`
 > regression (see Known Issues) does not affect Batch 3 — the Read matcher has no
 > `if:` gate.
-
 ```bash
 ./scripts/observe.sh --reset
 ```

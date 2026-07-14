@@ -271,6 +271,54 @@ class TestScanSecretsGateKnownBugs:
         assert code == 0
 
 
+class TestScanSecretsScopeGuard:
+    """Regression: the hook must be INERT on Bash input outside its scope.
+
+    Claude Code 2.1.201 stopped honoring the settings `if: Bash(git commit*)`
+    gate, so the hook fires on every Bash command. The in-body scope guard
+    reads the command from stdin and must exit 0 (without scanning) for
+    anything that is not a real `git commit` -- even when a secret is already
+    staged. These tests exercise the hook BODY, not the settings gate. Durable
+    version of TESTING.md 2.16/2.21/2.23.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo hello",
+            "git status",
+            # `git add` is a different scope -- this hook must NOT scan on it.
+            "git add .env",
+        ],
+        ids=["echo", "git-status", "git-add"],
+    )
+    def test_out_of_scope_command_is_inert_even_with_staged_secret(
+        self, git_repo: Path, command: str
+    ) -> None:
+        """A staged secret must NOT block a non-commit command.
+
+        This is the load-bearing regression: if the guard were removed, the
+        hook would run `git diff --cached`, find the staged secret, and exit 2
+        on an unrelated Bash command. With the guard it exits 0 without ever
+        scanning.
+        """
+        _stage_file(git_repo, "config.py", f"KEY = 'sk-ant-{'A' * 24}'\n")
+        payload = {"tool_input": {"command": command}}
+        code, _, _ = run_hook(HOOK, payload, cwd=str(git_repo))
+        assert code == 0, f"Expected inert exit 0 for out-of-scope: {command!r}"
+
+    def test_git_commit_in_scope_still_blocks_staged_secret(
+        self, git_repo: Path
+    ) -> None:
+        """Sanity counterpart: the guard must let a real `git commit` through
+        so the scan still fires (exit 2) on a staged secret."""
+        _stage_file(git_repo, "config.py", f"KEY = 'sk-ant-{'A' * 24}'\n")
+        payload = {"tool_input": {"command": "git commit -m 'ship it'"}}
+        code, stderr, _ = run_hook(HOOK, payload, cwd=str(git_repo))
+        assert code == 2
+        assert "BLOCKED" in stderr
+
+
 class TestScanSecretsGitNotFound:
     """When git is unavailable, the hook should fail open (exit 0).
 

@@ -78,6 +78,61 @@ class TestBlockGitAddEnvExamples:
         assert code == 2
 
 
+class TestBlockGitAddEnvScopeGuard:
+    """Regression: the hook must be INERT on Bash input outside its scope.
+
+    Claude Code 2.1.201 stopped honoring the settings `if: Bash(git add*)`
+    gate, so the hook fires on every Bash command. The in-body scope guard
+    must make it a no-op (exit 0) for anything that is not a real `git add`,
+    *regardless* of whether the command text mentions a bare `.env` token.
+    These tests exercise the hook BODY (feed a payload, assert exit code),
+    not the settings gate. Durable version of TESTING.md 2.16/2.21/2.23.
+    """
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "echo hello",
+            "git status",
+            # Non-git command that mentions a bare `.env` token: without the
+            # scope guard, env_file_re would false-block this.
+            "cp x .env.bak && ./y",
+            # The word "add" inside a commit MESSAGE must not look like `git add`.
+            "git commit -m 'add feature'",
+        ],
+        ids=["echo", "git-status", "non-git-mentions-env", "commit-msg-says-add"],
+    )
+    def test_out_of_scope_is_inert(self, bash_payload, cmd):
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
+        assert code == 0, f"Expected inert exit 0 for out-of-scope: {cmd!r}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git add .env",
+            "git add .env.local",
+            "git add .",
+            "git -C /tmp/r add .",
+        ],
+        ids=["add-env", "add-env-local", "add-dot", "dash-C-add-dot"],
+    )
+    def test_in_scope_git_add_blocks(self, bash_payload, cmd):
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
+        assert code == 2, f"Expected blocked exit 2 for: {cmd!r}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git add src/clean_module.py",
+            "git add .env.example",
+        ],
+        ids=["specific-file", "template"],
+    )
+    def test_in_scope_safe_git_add_allowed(self, bash_payload, cmd):
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
+        assert code == 0, f"Expected allowed exit 0 for: {cmd!r}"
+
+
 class TestBlockGitAddEnvBulkPatterns:
     """Parametrized tests for bulk add and specific file patterns."""
 

@@ -799,3 +799,85 @@ class TestBanditInjection:
             with open(src) as fh:
                 content = fh.read()
             assert content == original
+
+
+class TestBatchParsePyright:
+    """_batch_parse_pyright must key findings by the un-indented file path.
+
+    Pyright indents each diagnostic line by two spaces. If the path capture
+    group keeps that indent, the findings dict is keyed "  /abs/path" while
+    batch_main() looks up the un-indented "/abs/path" — so every pyright
+    finding is silently dropped. Batch mode is the only mode the Stop hook
+    uses, so this made # HOOK:PYRIGHT: injection fully non-functional.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from inject_tool_findings import _batch_parse_pyright
+
+        self.parse = _batch_parse_pyright
+
+    def test_path_key_has_no_leading_whitespace(self):
+        output = (
+            "/abs/path/app.py\n"
+            '  /abs/path/app.py:6:12 - error: Type "Literal[42]" is not '
+            'assignable to return type "str"\n'
+            '  /abs/path/app.py:11:12 - error: Operator "+" not supported '
+            "(reportOperatorIssue)\n"
+            "2 errors, 0 warnings, 0 informations\n"
+        )
+        findings = self.parse(output)
+        assert "/abs/path/app.py" in findings
+        assert "  /abs/path/app.py" not in findings
+        assert [ln for ln, _ in findings["/abs/path/app.py"]] == [6, 11]
+
+
+class TestBatchChecksStdinDrain:
+    """batch_checks.sh must run docstring+seed checks on EVERY changed .py file.
+
+    check_docstrings.py/check_random_seeds.py run inside a `while read` loop
+    fed by a stdin pipe; both call log_hook(), which does sys.stdin.read().
+    Without a </dev/null redirect the first child drains the file list and the
+    loop stops after one file. This is the regression guard: two changed files,
+    both must be annotated.
+    """
+
+    def test_docstring_and_seed_checks_run_on_all_files(self, fake_tool_env, tmp_path):
+        env, _ = (
+            fake_tool_env  # fakes uvx/pyright/bandit so only docstring+seed do real work
+        )
+        _init_git_repo(tmp_path)
+
+        # File 1 (sorts first): triggers the docstring check only.
+        doc_file = tmp_path / "a_needs_docstring.py"
+        doc_file.write_text(
+            "def compute(x, y, z):\n    a = x + y\n    b = a * z\n    return b\n"
+        )
+        # File 2 (sorts second): triggers the seed check only. Before the fix,
+        # the stdin drain meant this file was never reached.
+        seed_file = tmp_path / "b_needs_seed.py"
+        seed_file.write_text(
+            "import random\n\n\ndef pick(items):\n    chosen = random.choice(items)\n"
+            "    return chosen\n"
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "add",
+                "a_needs_docstring.py",
+                "b_needs_seed.py",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        run_bash_hook("batch_checks.sh", {}, env=env, cwd=str(tmp_path), timeout=30)
+
+        assert "# HOOK:DOCSTRING:" in doc_file.read_text(), (
+            "first file should be annotated"
+        )
+        assert "# HOOK:SEED:" in seed_file.read_text(), (
+            "second file must also be annotated — stdin drain regression"
+        )

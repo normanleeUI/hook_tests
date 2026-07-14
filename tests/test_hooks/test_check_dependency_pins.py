@@ -599,3 +599,66 @@ class TestDependencyPinsPreToolUse:
         }
         code, _, _ = run_hook(HOOK, payload)
         assert code == 0
+
+
+class TestDependencyPinsDiffAware:
+    """An Edit's new_string includes the unchanged *context* lines around the
+    change, so scanning all of it re-flags pre-existing unpinned deps that
+    merely sit near the edit (Batch 5 usability bug). The hook must diff
+    new_string against old_string and flag only *newly* unpinned deps.
+    """
+
+    def test_preexisting_open_ended_dep_in_context_not_reflagged(self):
+        """Adding a properly pinned dep next to a pre-existing open-ended dep
+        (present in both old and new) must be allowed."""
+        payload = {
+            "tool_input": {
+                "file_path": "pyproject.toml",
+                "old_string": 'dependencies = [\n    "httpx>=0.28.1",\n]',
+                "new_string": 'dependencies = [\n    "httpx>=0.28.1",\n    "requests==2.32.3",\n]',
+            }
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 0
+
+    def test_new_unpinned_still_blocks_and_names_only_the_new_dep(self):
+        """A genuinely new unpinned dep is still blocked, but the pre-existing
+        open-ended dep must NOT appear in the message."""
+        payload = {
+            "tool_input": {
+                "file_path": "pyproject.toml",
+                "old_string": 'dependencies = [\n    "httpx>=0.28.1",\n]',
+                "new_string": 'dependencies = [\n    "httpx>=0.28.1",\n    "requests",\n]',
+            }
+        }
+        code, stderr, _ = run_hook(HOOK, payload)
+        assert code == 2
+        assert "requests" in stderr
+        assert "httpx" not in stderr
+
+    def test_changing_pinned_dep_to_open_ended_blocks(self):
+        """If the edit itself loosens a dep from == to open-ended >=, that dep
+        is newly unpinned and must be blocked."""
+        payload = {
+            "tool_input": {
+                "file_path": "pyproject.toml",
+                "old_string": 'dependencies = [\n    "requests==2.32.3",\n]',
+                "new_string": 'dependencies = [\n    "requests>=2.32.3",\n]',
+            }
+        }
+        code, stderr, _ = run_hook(HOOK, payload)
+        assert code == 2
+        assert "requests" in stderr
+
+    def test_empty_old_string_checks_full_new_text(self):
+        """With an empty old_string baseline (nothing pre-existing), a new
+        unpinned dep is blocked — preserves original behavior."""
+        payload = {
+            "tool_input": {
+                "file_path": "pyproject.toml",
+                "old_string": "",
+                "new_string": 'dependencies = [\n    "requests",\n]',
+            }
+        }
+        code, _, _ = run_hook(HOOK, payload)
+        assert code == 2

@@ -130,7 +130,7 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
   for single patterns" (still shown for historical P13 context) is now false for
   2.1.201 — left annotated rather than deleted.
 
-- [ ] **🟡 `check_dependency_pins` scans whole modified text, re-flags pre-existing unpinned deps (discovered 2026-07-13, Batch 5)**:
+- [x] **🟢 `check_dependency_pins` re-flagged pre-existing unpinned deps — FIXED (2026-07-14)**:
   The hook flags every unpinned dep in the edit's `new_string` (open-ended `>=`
   counts as unpinned), not just added/changed lines. Because the committed
   `pyproject.toml` has `httpx>=0.28.1` (open-ended), it sits in the context of any
@@ -138,9 +138,18 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
   without also bounding `httpx` in the same edit (this blocked Batch 5's 5.2 until
   a variant bounded httpx). Not a security problem, but a usability trap. Fix
   options: make the hook diff-aware (check only added/changed lines), or bound
-  `httpx` in the fixture. Details in Batch 5 → check_dependency_pins. Not yet fixed.
+  `httpx` in the fixture. Details in Batch 5 → check_dependency_pins.
+  **Fix applied (2026-07-14)**: `check_dependency_pins.py` now diffs `new_string`
+  against `old_string` (present on every real Edit) and flags only deps that are
+  unpinned in the new text but were **not already unpinned** in the replaced old
+  text (set difference — preserves the stateful pyproject parser). A pre-existing
+  `httpx>=0.28.1` sitting in an edit's context now appears in both sets and is not
+  re-flagged; a genuinely new unpinned dep still blocks, and loosening an existing
+  `==` to open-ended `>=` still blocks. Write (whole-file `content`, no baseline) is
+  still checked in full. Regression tests: `TestDependencyPinsDiffAware` (4 cases).
+  Hook lives in `~/.claude/hooks/`.
 
-- [ ] **🔴 `batch_checks` PYRIGHT injection is dead in batch mode — path key includes pyright's indent (discovered 2026-07-14, Batch 6)**:
+- [x] **🟢 `batch_checks` PYRIGHT injection was dead in batch mode (path key included pyright's indent) — FIXED (2026-07-14)**:
   `batch_checks.sh` runs pyright via `inject_tool_findings.py --batch PYRIGHT`, whose
   parser `_batch_parse_pyright` uses `re.compile(r"(.+?):(\d+):\d+ - error: (.+)")`.
   Pyright indents every diagnostic line by two spaces
@@ -152,10 +161,13 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
   nothing; `multi_trigger.py` got BANDIT+SEMGREP but no PYRIGHT. The Stop hook only
   ever uses batch mode, so **`# HOOK:PYRIGHT:` injection is fully non-functional**.
   (Single-file `_parse_pyright` escapes the exact tmp path, so it's unaffected;
-  bandit/semgrep key off `Location: `/JSON `path`, so they work.) Fix: strip the path
-  group — e.g. `m.group(1).strip()` or anchor `^\s*(\S.*?):`. Not yet fixed.
+  bandit/semgrep key off `Location: `/JSON `path`, so they work.)
+  **Fix applied (2026-07-14)**: `_batch_parse_pyright` now keys findings by
+  `m.group(1).strip()`, stripping pyright's two-space indent so the key matches the
+  per-file lookup. Verified live: `--batch PYRIGHT` now injects both errors into
+  `type_errors.py`. Regression test: `TestBatchParsePyright`. Hook in `~/.claude/hooks/`.
 
-- [ ] **🔴 `batch_checks` DOCSTRING+SEED cover only the FIRST changed file — `log_hook` drains the loop's stdin (discovered 2026-07-14, Batch 6)**:
+- [x] **🟢 `batch_checks` DOCSTRING+SEED covered only the FIRST changed file (`log_hook` drained the loop's stdin) — FIXED (2026-07-14)**:
   `batch_checks.sh` runs the per-file checks in a pipe-fed loop:
   `echo "$abs_files" | while read -r abs; do python3 check_docstrings.py "$abs"; python3 check_random_seeds.py "$abs"; done`.
   Both scripts call `log_hook()` at import, and `log_hook`→`_read_trigger()`
@@ -167,10 +179,15 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
   injections despite `missing_docstrings.py`/`unseeded_random.py` being obvious
   triggers. Both scripts inject correctly when run standalone with a path arg, proving
   the drain — not the checks — is the fault. **DOCSTRING+SEED injection is
-  non-functional for any multi-file turn.** Fix (in `batch_checks.sh`): redirect each
-  script's stdin away from the loop pipe — `python3 check_docstrings.py "$abs" </dev/null`
-  (both scripts prefer `argv[1]`, so `</dev/null` is safe), or feed the loop over a
-  non-stdin FD. Not yet fixed.
+  non-functional for any multi-file turn.**
+  **Fix applied (2026-07-14)**: `batch_checks.sh` now redirects each per-file script's
+  stdin from `/dev/null` (`python3 check_docstrings.py "$abs" </dev/null`), so
+  `log_hook`'s `sys.stdin.read()` can't drain the loop's file list. Both scripts prefer
+  `argv[1]`, so `/dev/null` is safe. Verified live: a two-file loop now annotates both
+  files (docstring on the first, seed on the second) where before the second was
+  skipped. Regression test: `TestBatchChecksStdinDrain`. Hook in `~/.claude/hooks/`.
+  (Root cause is in `hook_log.py`'s unconditional stdin read; the fix is scoped to the
+  one caller that loops, leaving `log_hook`'s stash-and-restore behavior untouched.)
 
 - [x] **🟢 `pip_audit_check` never ran the audit — FIXED (2026-07-13, Batch 4)**:
   `pip_audit_check.py` (PostToolUse Bash) is meant to run `uvx pip-audit` after a

@@ -130,6 +130,16 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
   for single patterns" (still shown for historical P13 context) is now false for
   2.1.201 — left annotated rather than deleted.
 
+- [ ] **🟡 `check_dependency_pins` scans whole modified text, re-flags pre-existing unpinned deps (discovered 2026-07-13, Batch 5)**:
+  The hook flags every unpinned dep in the edit's `new_string` (open-ended `>=`
+  counts as unpinned), not just added/changed lines. Because the committed
+  `pyproject.toml` has `httpx>=0.28.1` (open-ended), it sits in the context of any
+  edit to the `dependencies` array — so you can't add even a properly-pinned dep
+  without also bounding `httpx` in the same edit (this blocked Batch 5's 5.2 until
+  a variant bounded httpx). Not a security problem, but a usability trap. Fix
+  options: make the hook diff-aware (check only added/changed lines), or bound
+  `httpx` in the fixture. Details in Batch 5 → check_dependency_pins. Not yet fixed.
+
 - [x] **🟢 `pip_audit_check` never ran the audit — FIXED (2026-07-13, Batch 4)**:
   `pip_audit_check.py` (PostToolUse Bash) is meant to run `uvx pip-audit` after a
   `uv add`/`uv sync` and write vulns to `.hook_state/pip_audit/report.json` for the
@@ -507,18 +517,30 @@ Phrase as: "edit `<file>` to `<change>`" or "add `<content>` to `<file>`"
 
 > **Wiring**: PreToolUse, matcher=Edit|Write, no `if:`.
 > **Observe via**: BLOCKED (exit 2, stderr visible) — edit prevented, file unchanged.
+>
+> **⚠️ FINDING (2026-07-13) — hook scans the whole modified text, not just added
+> lines.** It re-flags any unpinned dep already present in the edit's context, and
+> it treats open-ended `>=` (no upper bound) as unpinned. The committed
+> `pyproject.toml` has `httpx>=0.28.1` (open-ended), which sits in the context of
+> any edit to the `dependencies` array — so you **cannot add even a properly-pinned
+> dep without also bounding `httpx` in the same edit**. This made 5.2-as-written
+> fail (blocked on `httpx`, not on the pinned `requests`). Two reasonable fixes:
+> make the hook diff (check only added/changed lines), or bound `httpx` in the
+> fixture (`httpx>=0.28.1,<1.0`). Verified the dev-deps (also open-ended:
+> `pytest-xdist>=3.8.0`, `ruff>=0.8.0`) were NOT flagged — confirming it scans the
+> edit's `new_string`, not the whole file.
 
-- [ ] 5.1: edit `pyproject.toml` to add `"requests"` as a dependency (no version pin) — BLOCKED, file unchanged → `./scripts/observe.sh check_dependency_pins` then `git diff pyproject.toml`
-- [ ] 5.2: edit `pyproject.toml` to add `"requests==2.32.3"` as a dependency — allowed → `./scripts/observe.sh check_dependency_pins`
-- [ ] 5.3: add a comment to `src/clean_module.py` — hook fires, exits 0 (not a dep file) → `./scripts/observe.sh check_dependency_pins`
+- [x] 5.1: edit `pyproject.toml` to add `"requests"` (no pin) — **BLOCKED**, file unchanged (flagged both `requests` AND pre-existing `httpx>=0.28.1`) → FIRED/BLOCK
+- [x] 5.2: edit `pyproject.toml` to add `"requests==2.32.3"` — **as-written BLOCKED** (on `httpx>=0.28.1`, not on the pinned requests — see finding). Intent ("pinned dep allowed") **verified via variant**: editing to `httpx>=0.28.1,<1.0` + `requests==2.32.3` (all-pinned modified text) → ALLOWED. → FIRED/ALLOW
+- [x] 5.3: add a comment to `src/clean_module.py` — hook fires, exits 0 (not a dep file) → FIRED/ALLOW
 
 ### block_suppressions.py (Strategy A)
 
 > **Wiring**: PreToolUse, matcher=Edit|Write, no `if:`.
 > **Observe via**: BLOCKED (exit 2, stderr visible) — edit prevented.
 
-- [ ] 5.4: add `x = 1  # type: ignore` to `src/clean_module.py` — BLOCKED, line never written → `./scripts/observe.sh block_suppressions` then `git diff`
-- [ ] 5.5: add `x = 1  # type: ignore[override]  # mypy-bug: reason` to `src/clean_module.py` — allowed → `./scripts/observe.sh block_suppressions`
+- [x] 5.4: add `x = 1  # type: ignore` to `src/clean_module.py` — **BLOCKED**, line never written (bare unjustified suppression) → FIRED/BLOCK
+- [x] 5.5: add `x = 1  # type: ignore[override]  # mypy-bug: reason` to `src/clean_module.py` — **allowed** (has error code + justification marker) → FIRED/ALLOW
 
 ### block_glob_deny_rules.py (Strategy A — file reconstruction)
 
@@ -526,10 +548,17 @@ Phrase as: "edit `<file>` to `<change>`" or "add `<content>` to `<file>`"
 > **Observe via**: BLOCKED (exit 2, stderr visible) — edit prevented.
 > Uses file reconstruction: reads current file, applies proposed edit in memory, checks result.
 
-- [ ] 5.6: edit `.claude/settings.json` to add `Read(**/.env)` in a deny rule — BLOCKED → `./scripts/observe.sh block_glob_deny_rules`
-- [ ] 5.7: edit `.claude/settings.json` to add `Read(.env)` (specific, not glob) — allowed → `./scripts/observe.sh block_glob_deny_rules`
+- [x] 5.6: edit `.claude/settings.json` to add `Read(**/.env)` in a deny rule — **BLOCKED** (detected the `**` glob; WSL2 sandbox-hang rationale) → FIRED/BLOCK
+- [x] 5.7: edit `.claude/settings.json` to add `Read(.env)` (specific, not glob) — **allowed** → FIRED/ALLOW
 
 > **Important**: Restore settings.json after test 5.7 if Claude modified it.
+> **⚠️ Restore gotcha (2026-07-13):** `.claude/settings.json` is **gitignored**
+> (so `git checkout` won't restore it) **and** on the Bash sandbox deny-list (so a
+> shell `cp` to it fails "Read-only file system"). It can only be written via the
+> **Edit tool** (which is how 5.6/5.7 reach it in the first place). Procedure that
+> worked: back it up first (`cp settings.json settings.json.bak` — reading is
+> fine), then after 5.7 revert the change with the **Edit tool** (not `cp`), and
+> `rm` the backup (the `.bak` path is not on the deny-list).
 
 ```bash
 ./scripts/observe.sh --reset

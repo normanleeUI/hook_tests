@@ -126,6 +126,26 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
   for single patterns" (still shown for historical P13 context) is now false for
   2.1.201 — left annotated rather than deleted.
 
+- [ ] **🔴 `pip_audit_check` never runs the audit — vuln protection is inert (discovered 2026-07-13, Batch 4)**:
+  `pip_audit_check.py` (PostToolUse Bash) is meant to run `uvx pip-audit` after a
+  `uv add`/`uv sync` and write vulns to `.hook_state/pip_audit/report.json` for the
+  PreToolUse `pip_audit_guard` to block on. But its success-gate reads
+  `payload["tool_result"]["exitCode"]` — and a real PostToolUse payload has **no
+  `tool_result` key** (it is `tool_response`), and the Bash `tool_response` carries
+  **no `exitCode`** (captured keys: `stdout, stderr, interrupted, isImage,
+  noOutputExpected`). So `.get("exitCode", 1)` → 1 ≠ 0 → the hook returns before
+  ever calling `pip-audit`. The audit is dead code; no report is written; the guard
+  therefore never has real vulnerabilities to block on. **The two-phase pip-audit
+  protection provides no actual coverage as wired.** (The guard itself is correct —
+  its block path was validated with a simulated report.) Every other hook reads
+  `tool_response`, so this is a lone typo-class bug, not a harness regression.
+  **Suggested fix**: `tool_result` → `tool_response`, and drop the `exitCode` gate
+  (Claude Code doesn't expose a Bash exit code) — either audit unconditionally on a
+  matching uv command, or gate on `tool_response.get("interrupted")` to skip only
+  interrupted commands. Add a regression test feeding a realistic PostToolUse
+  payload (`tool_response`, no `exitCode`) that asserts the audit path is reached.
+  Hook lives in `~/.claude/hooks/` (outside this repo).
+
 - [x] **~~`scan_secrets_on_commit` logic bug~~ — RESOLVED (was a misdiagnosis)**:
   Previously believed `git diff --cached` returned empty in PreToolUse context.
   It does not. Verified end-to-end (2026-07-02): staging a realistic-length
@@ -423,23 +443,37 @@ pip_audit_guard (PreToolUse) can read it. Network-dependent — may be slow.
 > **Wiring**: PostToolUse, matcher=Bash, no `if:`.
 > **Observe via**: STATE-FILE at `.hook_state/pip_audit/report.json`.
 > Fires on every Bash command; internally filters for `uv add`/`uv sync`/`uv pip install`.
+>
+> **🔴 BUG FOUND (2026-07-13) — pip_audit_check never runs the audit.** It gates on
+> `payload["tool_result"]["exitCode"] == 0`, but the PostToolUse payload has **no
+> `tool_result` key** (it's `tool_response`) and the Bash `tool_response` has **no
+> `exitCode` field** at all (captured keys: `stdout, stderr, interrupted, isImage,
+> noOutputExpected`). So `.get("exitCode", 1)` defaults to 1, the success-gate
+> never passes, and the hook returns 0 before ever calling `uvx pip-audit`. Net:
+> the audit is dead code and no state file is ever produced — so the whole
+> two-phase vuln protection is **inert** (the guard below never has real vulns to
+> block on). See Known Issues. Every other hook correctly reads `tool_response`.
 
-- [ ] 4.1: run `uv add httpx` — state file created → `./scripts/observe.sh pip_audit_check` then `cat .hook_state/pip_audit/report.json`
-- [ ] 4.2: run `uv sync` — state file updated → `./scripts/observe.sh pip_audit_check`
-- [ ] 4.3: run `git status` — hook fires but exits immediately (not a uv command) → `./scripts/observe.sh pip_audit_check`
+- [x] 4.1: run `uv add httpx` — pip_audit_check FIRED but **skipped the audit** (FIRED/ALLOW same ms, no `uvx pip-audit` run); **no report.json created** (expected "state file created" — FAILS due to bug) → verified via debug log + `ls .hook_state/pip_audit/`
+- [x] 4.2: run `uv sync` — same: FIRED, skipped audit, no state written (bug)
+- [x] 4.3: run `git status` — hook fires, not a uv command → exits 0 immediately (correct; the internal `uv add`/`uv sync` filter works)
 
 ### Step 2 — pip_audit_guard reads state and blocks
 
 > **Wiring**: PreToolUse, matcher=Bash, no `if:`.
 > **Observe via**: BLOCKED (exit 2) when state file has vulns; silent exit 0 otherwise.
+> **✅ The guard (consumer) WORKS** — only pip_audit_check (producer) is broken.
+> Because the producer never writes a real report, the guard's block path was
+> validated with a **simulated** vuln report.json (the schema a fixed check would
+> write).
 
-- [ ] 4.4: run `uv add requests` — BLOCKED if vulns in state file, else allowed → `./scripts/observe.sh pip_audit_guard`
-- [ ] 4.5: run `git status` — guard fires but exits 0 (not a uv command) → `./scripts/observe.sh pip_audit_guard`
+- [x] 4.4: run `uv add requests` — no state file present → guard FIRED/ALLOW (correct). **Block path confirmed** separately: with a simulated `report.json` (`summary: VULNERABILITIES FOUND`) staged, `uv add httpx` was BLOCKED (exit 2) showing the vuln details. → debug log + observed block
+- [x] 4.5: run `git status` — guard fires, not a uv command → exits 0 (correct)
 
 ### Step 3 — clean audit clears state
 
-- [ ] 4.6: run `uv sync` — if no vulns, state file cleared → `ls -la .hook_state/pip_audit/report.json`
-- [ ] 4.7: run `uv add requests` — allowed (no state file = no block) → `./scripts/observe.sh pip_audit_guard`
+- [~] 4.6: run `uv sync` — **N/A (blocked by the Step-1 bug)**: pip_audit_check never runs the audit, so it never produces or clears state. The "delete report on clean audit" branch (`report_file.unlink()`) is unreachable in practice until pip_audit_check is fixed.
+- [x] 4.7: run `uv add requests` — no state file → guard ALLOWED (correct; same as 4.4)
 
 ### Step 4 — negative: no state file at all
 
@@ -448,7 +482,7 @@ pip_audit_guard (PreToolUse) can read it. Network-dependent — may be slow.
 rm -f .hook_state/pip_audit/report.json
 ```
 
-- [ ] 4.8: run `uv add httpx` — pip_audit_guard exits 0 (no state file) → `./scripts/observe.sh pip_audit_guard`
+- [x] 4.8: run `uv add httpx` — no state file → pip_audit_guard exits 0 (correct; covered by the no-state ALLOW observed in 4.4/4.7)
 
 ```bash
 ./scripts/observe.sh --reset

@@ -39,7 +39,11 @@ Empirically validated output channels (see `probes/PROBE_RESULTS_PHASE2.md`):
 | ~~STDERR (exit 0)~~ | ~~stderr on allow~~ | | **Never visible** |
 
 **Key limitations:**
-- Read matcher exit-2 blocks show only a red dot (stderr not rendered), but the block works
+- Read matcher exit-2 blocks show only a red dot (stderr not rendered), but the block works.
+  **Confirmed 2026-07-13 (2.1.201):** the user's terminal shows *only* a bare red dot
+  for 3.1–3.3 — but the model DOES receive the full block stderr as a tool error. So
+  the channel reaches the model, just not the user visually. (Bash exit-2 blocks, by
+  contrast, render their stderr to the user.)
 - PostToolUse exit 2 is **cosmetic** — the edit already happened; only informs Claude
 - PostToolUse hooks in the same group run **in parallel** — currently only ruff_format is in the Edit|Write group, so this is not a concern; batch_checks.sh runs tools sequentially
 - ~~`if:` conditions work for single patterns~~; `|` OR syntax does NOT work.
@@ -126,7 +130,7 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
   for single patterns" (still shown for historical P13 context) is now false for
   2.1.201 — left annotated rather than deleted.
 
-- [ ] **🔴 `pip_audit_check` never runs the audit — vuln protection is inert (discovered 2026-07-13, Batch 4)**:
+- [x] **🟢 `pip_audit_check` never ran the audit — FIXED (2026-07-13, Batch 4)**:
   `pip_audit_check.py` (PostToolUse Bash) is meant to run `uvx pip-audit` after a
   `uv add`/`uv sync` and write vulns to `.hook_state/pip_audit/report.json` for the
   PreToolUse `pip_audit_guard` to block on. But its success-gate reads
@@ -139,11 +143,12 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
   protection provides no actual coverage as wired.** (The guard itself is correct —
   its block path was validated with a simulated report.) Every other hook reads
   `tool_response`, so this is a lone typo-class bug, not a harness regression.
-  **Suggested fix**: `tool_result` → `tool_response`, and drop the `exitCode` gate
-  (Claude Code doesn't expose a Bash exit code) — either audit unconditionally on a
-  matching uv command, or gate on `tool_response.get("interrupted")` to skip only
-  interrupted commands. Add a regression test feeding a realistic PostToolUse
-  payload (`tool_response`, no `exitCode`) that asserts the audit path is reached.
+  **Fix applied (2026-07-13)**: `pip_audit_check.py` now reads `tool_response` and
+  skips only on `interrupted` (Claude Code exposes no Bash exit code), so the audit
+  runs on every matching uv command. Verified live — `pip_audit_check` now shows a
+  ~5s FIRED→ALLOW gap on `uv add httpx` (audit actually runs) vs. same-ms before;
+  deps were clean so no report was written. Vuln→report and clean→unlink paths are
+  covered by a mocked regression test in `tests/test_hooks/test_pip_audit_check.py`.
   Hook lives in `~/.claude/hooks/` (outside this repo).
 
 - [x] **~~`scan_secrets_on_commit` logic bug~~ — RESOLVED (was a misdiagnosis)**:
@@ -444,18 +449,19 @@ pip_audit_guard (PreToolUse) can read it. Network-dependent — may be slow.
 > **Observe via**: STATE-FILE at `.hook_state/pip_audit/report.json`.
 > Fires on every Bash command; internally filters for `uv add`/`uv sync`/`uv pip install`.
 >
-> **🔴 BUG FOUND (2026-07-13) — pip_audit_check never runs the audit.** It gates on
+> **🔴→🟢 BUG FOUND & FIXED (2026-07-13).** pip_audit_check gated the audit on
 > `payload["tool_result"]["exitCode"] == 0`, but the PostToolUse payload has **no
 > `tool_result` key** (it's `tool_response`) and the Bash `tool_response` has **no
-> `exitCode` field** at all (captured keys: `stdout, stderr, interrupted, isImage,
-> noOutputExpected`). So `.get("exitCode", 1)` defaults to 1, the success-gate
-> never passes, and the hook returns 0 before ever calling `uvx pip-audit`. Net:
-> the audit is dead code and no state file is ever produced — so the whole
-> two-phase vuln protection is **inert** (the guard below never has real vulns to
-> block on). See Known Issues. Every other hook correctly reads `tool_response`.
+> `exitCode` field** (captured keys: `stdout, stderr, interrupted, isImage,
+> noOutputExpected`). So `.get("exitCode", 1)` defaulted to 1, the gate never
+> passed, and the hook returned before ever calling `uvx pip-audit` — the audit
+> was dead code and the two-phase protection was inert. **Fix**: read
+> `tool_response` and skip only on `interrupted` (Claude Code exposes no Bash exit
+> code). Verified live: `pip_audit_check` now shows a ~5s FIRED→ALLOW gap on a uv
+> command (audit actually runs) vs. same-ms before. See Known Issues.
 
-- [x] 4.1: run `uv add httpx` — pip_audit_check FIRED but **skipped the audit** (FIRED/ALLOW same ms, no `uvx pip-audit` run); **no report.json created** (expected "state file created" — FAILS due to bug) → verified via debug log + `ls .hook_state/pip_audit/`
-- [x] 4.2: run `uv sync` — same: FIRED, skipped audit, no state written (bug)
+- [x] 4.1: run `uv add httpx` — **after fix**: pip_audit_check FIRED at 19:40:30.672 → ALLOW at 19:40:35.730 (~5s gap = `uvx pip-audit` ran). Deps clean → no report.json written (correct; "state file created" only happens when vulns exist). Vuln→report path covered by the mocked regression test. → debug log timing
+- [x] 4.2: run `uv sync` — same code path; audit now runs (was skipped pre-fix)
 - [x] 4.3: run `git status` — hook fires, not a uv command → exits 0 immediately (correct; the internal `uv add`/`uv sync` filter works)
 
 ### Step 2 — pip_audit_guard reads state and blocks
@@ -472,7 +478,7 @@ pip_audit_guard (PreToolUse) can read it. Network-dependent — may be slow.
 
 ### Step 3 — clean audit clears state
 
-- [~] 4.6: run `uv sync` — **N/A (blocked by the Step-1 bug)**: pip_audit_check never runs the audit, so it never produces or clears state. The "delete report on clean audit" branch (`report_file.unlink()`) is unreachable in practice until pip_audit_check is fixed.
+- [x] 4.6: run `uv sync` — **after fix**: the audit runs; on a clean result the "delete report" branch (`report_file.unlink()`) is now reachable (project deps are clean, so any existing report would be cleared). Covered by the mocked regression test's clean-result case.
 - [x] 4.7: run `uv add requests` — no state file → guard ALLOWED (correct; same as 4.4)
 
 ### Step 4 — negative: no state file at all

@@ -10,7 +10,6 @@ import os
 import sys
 
 sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
-# HOOK:PYRIGHT: Import "hook_log" could not be resolved (reportMissingImports)
 from hook_log import log_hook
 
 probe_id = os.environ.get("PROBE_ID", "session_start")

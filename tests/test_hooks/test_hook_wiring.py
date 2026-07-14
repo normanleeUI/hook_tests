@@ -13,8 +13,16 @@ from pathlib import Path
 
 import pytest
 
-HOOKS_DIR = Path.home() / ".claude" / "hooks"
-SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+# Both paths are env-overridable so the suite can run against the vendored
+# hooks/ dir (see hooks/ in the repo root) in CI, where there is no live
+# ~/.claude install. Locally they default to the real Claude config so the
+# wiring checks validate your actual setup.
+HOOKS_DIR = Path(os.environ.get("HOOKS_DIR", str(Path.home() / ".claude" / "hooks")))
+SETTINGS_PATH = Path(
+    os.environ.get(
+        "CLAUDE_SETTINGS_PATH", str(Path.home() / ".claude" / "settings.json")
+    )
+)
 
 VALID_TOOL_NAMES = {
     "Read",
@@ -44,6 +52,12 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "if_condition": None,
     },
     "check_dep_freshness.sh": {
+        "event": "SessionStart",
+        "interpreter": "bash",
+        "matcher": None,
+        "if_condition": None,
+    },
+    "config_drift_check.sh": {
         "event": "SessionStart",
         "interpreter": "bash",
         "matcher": None,
@@ -162,7 +176,16 @@ KNOWN_LIBRARIES: set[str] = {
 
 
 def load_settings() -> dict:
-    """Load and parse ~/.claude/settings.json."""
+    """Load and parse the live Claude settings.json.
+
+    Skips (rather than fails) when no settings file is present -- e.g. in CI or
+    a fresh clone with no Claude install. Wiring validation is inherently about
+    a real machine's config; there is nothing to validate without one.
+    """
+    if not SETTINGS_PATH.exists():
+        pytest.skip(
+            f"No Claude settings file at {SETTINGS_PATH}; wiring check is local-only"
+        )
     return json.loads(SETTINGS_PATH.read_text())
 
 

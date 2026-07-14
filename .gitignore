@@ -33,3 +33,4 @@ prompts/
 .hook_state/
 *.hook_lock
 _scratch/
+.last_dep_check

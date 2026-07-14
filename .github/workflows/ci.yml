@@ -25,4 +25,9 @@ jobs:
         run: uv run ruff check .
 
       - name: Test
+        # Point the harness at the vendored hook scripts in this repo.
+        # Without this it defaults to ~/.claude/hooks (absent in CI), and every
+        # hook test would silently skip -- a green-but-meaningless run.
+        env:
+          HOOKS_DIR: ${{ github.workspace }}/hooks
         run: uv run pytest tests/test_hooks/ -v

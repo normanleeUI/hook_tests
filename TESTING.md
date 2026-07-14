@@ -97,6 +97,24 @@ bash scripts/install_hooks.sh   # copies .githooks/pre-commit -> .git/hooks/pre-
 
 ## Known Issues
 
+- [ ] **🔴 `if:` hook gating regressed to a no-op (discovered 2026-07-13)**:
+  In the current Claude Code harness, the `if:` condition field is **ignored** —
+  hooks fire on every command their `matcher` matches, regardless of the `if:`
+  pattern. Confirmed from the name-column debug log (`cwd=hook_tests`): both
+  `block_git_add_env` (`if: Bash(git add*)`) and `scan_secrets_on_commit`
+  (`if: Bash(git commit*)`) FIRED on plain `echo`/`cp`/`cd` commands containing
+  no `git` at all. This **contradicts** the "`if:` conditions work for single
+  patterns" note (Observation Guide + probe P13) and **invalidates** the
+  filtering assertions in tests **2.16, 2.21, 2.23** (they expect the gated hook
+  to NOT fire on `git status` / `echo hello`; it now fires and merely ALLOWs, or
+  BLOCKs if a bare non-template `.env` token is present). Likely fallout from the
+  2026-06 harness pass. `scan_secrets`' over-firing is benign (ALLOWs when no
+  secret is staged); `block_git_add_env`'s is visible — it now blocks any Bash
+  command containing a bare `.env` token, e.g. a `for f in .env …` loop.
+  **Not yet fixed** — logged per the log-and-continue playbook; needs a dedicated
+  pass (re-point `if:` to the current harness mechanism, or push the git-add /
+  git-commit scoping into the hook bodies since the settings gate is dead).
+
 - [x] **~~`scan_secrets_on_commit` logic bug~~ — RESOLVED (was a misdiagnosis)**:
   Previously believed `git diff --cached` returned empty in PreToolUse context.
   It does not. Verified end-to-end (2026-07-02): staging a realistic-length
@@ -327,9 +345,16 @@ rm -f src/staged_secret_test.py
 > git-native pre-commit secret backstop. Safe to run live — it blocks, so no
 > commit lands.
 
-- [ ] 2.25: run `git commit --no-verify -m x` — BLOCKED → `./scripts/observe.sh block_no_verify`
-- [ ] 2.26: run `git commit -n -m x` — BLOCKED (`-n` is the short form) → `./scripts/observe.sh block_no_verify`
-- [ ] 2.27: run `echo hello` — allowed, hook fired → `./scripts/observe.sh block_no_verify`
+- [x] 2.25: run `git commit --no-verify -m x` — BLOCKED → `./scripts/observe.sh block_no_verify`
+- [x] 2.26: run `git commit -n -m x` — BLOCKED (`-n` is the short form) → `./scripts/observe.sh block_no_verify`
+- [x] 2.27: run `echo hello` — allowed, hook fired → `./scripts/observe.sh block_no_verify`
+
+> **Verified 2026-07-13** (live session, name-column debug log, `cwd=hook_tests`):
+> 2.25 `git commit --no-verify -m x` → FIRED/BLOCK; 2.26 `git commit -n -m x` →
+> FIRED/BLOCK; 2.27 `echo hello` → FIRED/ALLOW. Aside: `block_no_verify` scans
+> command *text*, so an `observe`/`grep` command that literally contains
+> `git commit -n` or `--no-verify` is itself blocked — keep those tokens out of
+> observation commands.
 
 ---
 
@@ -345,14 +370,20 @@ Phrase as: "read the file `<path>`"
 
 **Should BLOCK:**
 
-- [ ] 3.1: read the file `.env` — BLOCKED (red dot, tool error) → `./scripts/observe.sh block_read_env`
-- [ ] 3.2: read the file `.env.local` — BLOCKED → `./scripts/observe.sh block_read_env`
-- [ ] 3.3: read the file `.env.production` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [x] 3.1: read the file `.env` — BLOCKED (red dot, tool error) → `./scripts/observe.sh block_read_env`
+- [x] 3.2: read the file `.env.local` — BLOCKED → `./scripts/observe.sh block_read_env`
+- [x] 3.3: read the file `.env.production` — BLOCKED → `./scripts/observe.sh block_read_env`
 
 **Should ALLOW:**
 
-- [ ] 3.4: read the file `.env.example` — allowed (contents shown) → `./scripts/observe.sh block_read_env`
-- [ ] 3.5: read the file `src/clean_module.py` — allowed → `./scripts/observe.sh block_read_env`
+- [x] 3.4: read the file `.env.example` — allowed (contents shown) → `./scripts/observe.sh block_read_env`
+- [x] 3.5: read the file `src/clean_module.py` — allowed → `./scripts/observe.sh block_read_env`
+
+> **Verified 2026-07-13** (live session, Read matcher, name-column debug log):
+> `.env` / `.env.local` / `.env.production` → FIRED/BLOCK; `.env.example`
+> (template allowlist) / `src/clean_module.py` → FIRED/ALLOW. The Bash `if:`
+> regression (see Known Issues) does not affect Batch 3 — the Read matcher has no
+> `if:` gate.
 
 ```bash
 ./scripts/observe.sh --reset

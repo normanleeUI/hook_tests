@@ -30,3 +30,8 @@ markers = [
 # src/has_suppressions.py is an intentional fixture with bad code for testing
 # suppression detection; it must not be linted.
 exclude = ["src/has_suppressions.py"]
+
+[dependency-groups]
+dev = [
+    "semgrep>=1.169.0",
+]

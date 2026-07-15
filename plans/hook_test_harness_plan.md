@@ -4358,6 +4358,12 @@ SLACK_TOKEN = "xoxb-123456789012-abcdefghijklmn"
 
 #### `fixtures/.env.production` — triggers block_read_env
 
+> **Note:** this fixture is intentionally **not committed to the public repo** —
+> a file named `.env.production` full of secret-shaped values trips GitHub push
+> protection and reads as alarming. To reproduce the manual demo, create any
+> throwaway `.env`-named file locally; the hook blocks on the filename, not the
+> contents.
+
 **Target hook**: `block_read_env.py` (PreToolUse Read)
 
 **Why it triggers**: Filename matches `.env.*` pattern (basename starts with `.env`). The hook blocks based on filename, not content.

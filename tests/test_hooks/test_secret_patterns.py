@@ -242,9 +242,13 @@ class TestSecretPatternsCompleteness:
 
     def test_patterns_match_hook_source(self) -> None:
         """Canary: detect if hook patterns diverge from the test-local copy."""
+        import os
         from pathlib import Path
 
-        hook_path = Path.home() / ".claude" / "hooks" / "scan_secrets_on_commit.py"
+        hooks_dir = Path(
+            os.environ.get("HOOKS_DIR", str(Path.home() / ".claude" / "hooks"))
+        )
+        hook_path = hooks_dir / "scan_secrets_on_commit.py"
         source = hook_path.read_text()
         for name, compiled in PATTERNS.items():
             assert compiled.pattern in source, (

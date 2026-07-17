@@ -1,34 +1,21 @@
-"""Tests for the semgrep_check hook: shell wrapper gate logic, parser, and integration.
+"""Tests for the Semgrep parser and its wiring into batch_checks.sh.
 
-Derived from the hook spec — semgrep_check is a PostToolUse Edit|Write hook that
-runs Semgrep on .py files via inject_tool_findings.py's inline injection pattern.
-
-Unlike bandit_check.sh, this hook does NOT skip test files — test code can contain
-genuinely security-relevant patterns (real network calls, unsafe deserialization).
+The old per-file semgrep_check.sh PostToolUse wrapper was removed 2026-07-17.
+Semgrep now runs via the Stop hook batch_checks.sh, which shells out to
+inject_tool_findings.py --batch SEMGREP. These tests cover the surviving live
+components: the JSON-output parser and the SEMGREP batch wiring.
 """
 
 from __future__ import annotations
 
-import ast
 import json
-import os
-import stat
 import sys
-import tempfile
 
 import pytest
 
-from tests.test_hooks.hook_runner import HOOKS_DIR, run_bash_hook
+from tests.test_hooks.hook_runner import HOOKS_DIR
 
 sys.path.insert(0, str(HOOKS_DIR))
-
-
-def edit_payload(file_path: str) -> dict:
-    """Build a PostToolUse payload with both jq-extractable path fields."""
-    return {
-        "tool_input": {"file_path": file_path, "new_string": "x = 1\n"},
-        "tool_response": {"filePath": file_path},
-    }
 
 
 # ── Parser unit tests ──────────────────────────────────────────────────────
@@ -134,123 +121,18 @@ class TestParseSemgrep:
         assert "eval-detected" in msg
 
 
-# ── Shell wrapper gate tests ────────────────────────────────────────────────
-
-
-@pytest.fixture
-def fake_tool_env(tmp_path):
-    """Create fake tool stubs that log invocations instead of running real tools."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log_file = tmp_path / "tool_invocations.log"
-
-    for tool_name in ("uvx", "semgrep"):
-        stub = bin_dir / tool_name
-        stub.write_text(
-            f'#!/usr/bin/env bash\necho "{tool_name} $@" >> {log_file}\nexit 0\n'
-        )
-        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
-
-    env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": os.environ["HOME"]}
-    return env, log_file
-
-
-def _read_log(log_file) -> str:
-    if log_file.exists():
-        return log_file.read_text()
-    return ""
-
-
-class TestSemgrepCheckShell:
-    """Gate logic tests for semgrep_check.sh shell wrapper."""
-
-    def test_fires_on_py_file(self, fake_tool_env):
-        """TEST-SEMGREP-SH-P01: runs on .py files."""
-        env, log_file = fake_tool_env
-        with tempfile.TemporaryDirectory(prefix="proj_") as td:
-            py_file = os.path.join(td, "app.py")
-            with open(py_file, "w") as fh:
-                fh.write("import os\n")
-
-            rc, stderr, stdout = run_bash_hook(
-                "semgrep_check.sh", edit_payload(py_file), env=env
-            )
-
-            assert rc == 0
-
-    def test_does_not_skip_test_files(self, fake_tool_env):
-        """TEST-SEMGREP-SH-P02: unlike bandit, semgrep runs on test files."""
-        env, log_file = fake_tool_env
-        with tempfile.TemporaryDirectory(prefix="proj_") as td:
-            test_file = os.path.join(td, "test_app.py")
-            with open(test_file, "w") as fh:
-                fh.write("import subprocess\n")
-
-            rc, stderr, stdout = run_bash_hook(
-                "semgrep_check.sh", edit_payload(test_file), env=env
-            )
-
-            assert rc == 0
-
-    def test_skips_non_python_file(self, fake_tool_env, tmp_path):
-        """TEST-SEMGREP-SH-N01: non-.py files are silently skipped."""
-        env, log_file = fake_tool_env
-        js_file = tmp_path / "index.js"
-        js_file.write_text("const x = 1;\n")
-
-        rc, stderr, stdout = run_bash_hook(
-            "semgrep_check.sh", edit_payload(str(js_file)), env=env
-        )
-
-        assert rc == 0
-        log = _read_log(log_file)
-        assert log == "", "semgrep should not run on .js files"
-
-    def test_skips_claude_directory(self, fake_tool_env, tmp_path):
-        """TEST-SEMGREP-SH-N02: files under .claude/ are skipped."""
-        env, log_file = fake_tool_env
-        claude_dir = tmp_path / ".claude" / "hooks"
-        claude_dir.mkdir(parents=True)
-        hook_file = claude_dir / "some_hook.py"
-        hook_file.write_text("pass\n")
-
-        rc, stderr, stdout = run_bash_hook(
-            "semgrep_check.sh", edit_payload(str(hook_file)), env=env
-        )
-
-        assert rc == 0
-        log = _read_log(log_file)
-        assert log == "", "semgrep should skip files in .claude/"
-
-    def test_handles_missing_file_path(self, fake_tool_env):
-        """TEST-SEMGREP-SH-E01: gracefully handles missing file path in payload."""
-        env, log_file = fake_tool_env
-        payload = {"tool_input": {}, "tool_response": {}}
-
-        rc, stderr, stdout = run_bash_hook("semgrep_check.sh", payload, env=env)
-
-        assert rc == 0
-        log = _read_log(log_file)
-        assert log == "", "semgrep should not run with missing file path"
-
-
 # ── Wiring validation ──────────────────────────────────────────────────────
 
 
 class TestSemgrepWiring:
-    """Verify hook is correctly registered and script exists."""
+    """Verify Semgrep is wired into the batch Stop hook, not a standalone script."""
 
     def test_called_by_batch_checks(self):
-        """TEST-SEMGREP-W01: semgrep_check is called by batch_checks.sh (Stop hook)."""
+        """TEST-SEMGREP-W01: semgrep runs from batch_checks.sh (Stop hook)."""
         batch_script = HOOKS_DIR / "batch_checks.sh"
         assert batch_script.exists(), "batch_checks.sh not found"
         content = batch_script.read_text()
         assert "SEMGREP" in content, "batch_checks.sh does not reference SEMGREP"
-
-    def test_script_exists(self):
-        """TEST-SEMGREP-W02: hook script file exists on disk."""
-        script = HOOKS_DIR / "semgrep_check.sh"
-        assert script.exists(), f"Script not found: {script}"
 
     def test_inject_tool_findings_has_semgrep_config(self):
         """TEST-SEMGREP-W03: TOOL_CONFIGS has a SEMGREP entry."""
@@ -262,62 +144,3 @@ class TestSemgrepWiring:
         assert "args" in config
         assert "parser" in config
         assert "env" in config
-
-
-# ── Integration test (real semgrep) ─────────────────────────────────────────
-
-
-@pytest.mark.slow
-class TestSemgrepIntegration:
-    """End-to-end: run real semgrep and verify inline injection."""
-
-    def test_injects_comment_on_eval(self):
-        """TEST-SEMGREP-INT01: eval() triggers a HOOK:SEMGREP: comment."""
-        with tempfile.TemporaryDirectory(prefix="proj_") as td:
-            src = os.path.join(td, "vuln.py")
-            with open(src, "w") as fh:
-                fh.write(
-                    "import os\n"
-                    'user_input = input("Enter: ")\n'
-                    "result = eval(user_input)\n"
-                )
-            payload = {
-                "tool_input": {"file_path": src},
-                "tool_response": {"filePath": src},
-            }
-            run_bash_hook("semgrep_check.sh", payload, timeout=60)
-            with open(src) as fh:
-                content = fh.read()
-            assert "# HOOK:SEMGREP:" in content
-            ast.parse(content)
-
-    def test_no_injection_when_clean(self):
-        """Clean code produces no HOOK:SEMGREP: comments."""
-        with tempfile.TemporaryDirectory(prefix="proj_") as td:
-            src = os.path.join(td, "clean.py")
-            original = "x = 1\ny = x + 2\n"
-            with open(src, "w") as fh:
-                fh.write(original)
-            payload = {
-                "tool_input": {"file_path": src},
-                "tool_response": {"filePath": src},
-            }
-            run_bash_hook("semgrep_check.sh", payload, timeout=60)
-            with open(src) as fh:
-                content = fh.read()
-            assert content == original
-
-    def test_stale_comments_cleaned(self):
-        """Stale HOOK:SEMGREP: comments are removed on re-run."""
-        with tempfile.TemporaryDirectory(prefix="proj_") as td:
-            src = os.path.join(td, "clean.py")
-            with open(src, "w") as fh:
-                fh.write("# HOOK:SEMGREP: old stale finding\nx = 1\ny = x + 2\n")
-            payload = {
-                "tool_input": {"file_path": src},
-                "tool_response": {"filePath": src},
-            }
-            run_bash_hook("semgrep_check.sh", payload, timeout=60)
-            with open(src) as fh:
-                content = fh.read()
-            assert "old stale finding" not in content

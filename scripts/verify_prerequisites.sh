@@ -68,9 +68,6 @@ SHELL_HOOKS=(
     git_pull_on_start.sh
     check_dep_freshness.sh
     ruff_format.sh
-    pyright_check.sh
-    bandit_check.sh
-    semgrep_check.sh
     ruff_lint.sh
 )
 

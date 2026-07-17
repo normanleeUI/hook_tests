@@ -160,6 +160,13 @@ DEPRECATED_HOOKS: dict[str, str] = {
     "r_style_check.sh": "Unwired 2026-06-13: R not actively used",
     "plan_runner_write_gate.py": "Never wired: plan runner concept abandoned",
     "check_test_pair.py": "Unwired 2026-06-21: obsolete, uses dead stdout channel",
+    # Removed from the repo 2026-07-17. Superseded by the Stop hook batch_checks.sh,
+    # which runs these tools once via inject_tool_findings.py --batch instead of a
+    # per-file PostToolUse wrapper each. Kept here so re-wiring them is flagged, and
+    # so a live ~/.claude/hooks that still has them is not reported as an orphan.
+    "pyright_check.sh": "Superseded 2026-07-17: pyright runs via batch_checks.sh",
+    "bandit_check.sh": "Superseded 2026-07-17: bandit runs via batch_checks.sh",
+    "semgrep_check.sh": "Superseded 2026-07-17: semgrep runs via batch_checks.sh",
 }
 
 KNOWN_LIBRARIES: set[str] = {
@@ -167,11 +174,8 @@ KNOWN_LIBRARIES: set[str] = {
     "hook_inject.py",
     "inject_tool_findings.py",
     # Called by batch_checks.sh, not individually wired
-    "pyright_check.sh",
     "check_docstrings.py",
     "check_random_seeds.py",
-    "bandit_check.sh",
-    "semgrep_check.sh",
 }
 
 

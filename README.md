@@ -6,8 +6,8 @@ to test hooks so you find out *before* you rely on one. It ships:
 
 - **A reference table of empirically-verified hook channel behavior** (below) —
   the reusable takeaway, even if you never run the code.
-- **~30 real hook scripts** in [`hooks/`](hooks/) (security guards, linters,
-  injection scanners) you can read or adapt.
+- **~20 real hook scripts** in [`hooks/`](hooks/) (security guards, linters,
+  injection scanners) you can read or adapt — see [the table below](#the-hooks).
 - **A pytest/Hypothesis harness** (`tests/test_hooks/`) that verifies both hook
   *logic* (does the script decide correctly?) and hook *wiring* (does Claude
   Code actually fire it?).
@@ -51,14 +51,39 @@ Every "works / doesn't" below is observed behavior, not documentation.
 stdout** (to brief the model), and **direct file side-effects**. Design hooks
 around those; treat everything else as decorative.
 
-### Behavioral gotchas that cost real debugging time
+### Hooks in the same group fire in *parallel*, not sequentially
 
-- **PostToolUse hooks in the same group run in *parallel*, not sequentially.**
-  Two hooks that read-modify-write the same file will race, and the last writer
-  wins — findings silently vanish. Fix: `fcntl.flock` on a shared
-  `<filepath>.hook_lock`, held only during the read-modify-write phase. (We
-  first concluded "sequential" from a fast/slow hook pair — a good lesson in
-  probe design; see the addendum in [`probes/PROBE_RESULTS_PHASE2.md`](probes/PROBE_RESULTS_PHASE2.md).)
+Every hook wired to the same event+matcher group is launched **concurrently** —
+there is no ordering guarantee and no serialization between them. This is easy
+to get wrong: we first concluded "sequential" from a fast/slow hook pair, which
+turned out to be a lesson in probe design, not hook behavior (see the addendum
+in [`probes/PROBE_RESULTS_PHASE2.md`](probes/PROBE_RESULTS_PHASE2.md)).
+
+Parallelism is harmless until two hooks touch the same mutable state. The hooks
+that **inject `# HOOK:<TOOL>:` comments** — `inject_tool_findings.py` and the
+docstring/seed checks — each do a *read → modify → write* of the same source
+file. Run concurrently, they race: the last writer wins and the other hook's
+comments silently vanish. A read-modify-write across a shared file is the
+canonical shape of this bug.
+
+**This is what the `.hook_lock` file is for.** Each injector takes an exclusive
+`fcntl.flock` on a **per-target-file** lock at `<filepath>.hook_lock`, holds it
+across the whole read-analyze-write, then releases and unlinks it — see
+[`hooks/hook_inject.py`](hooks/hook_inject.py) `read_clean_write()`. Because the
+lock is per file (not one global lock), injections into *different* files still
+run in parallel. Two caveats worth stating honestly:
+
+- Only the **injection** hooks lock. Hooks that merely *block* (exit 2) or write
+  their own [state file](#the-hooks) share no mutable file with a sibling, so
+  they don't need one.
+- In the current layout the injectors are driven **sequentially** by the
+  `batch_checks.sh` Stop hook, so the lock is now more belt-and-suspenders than
+  actively contended — it earned its keep when pyright/bandit/semgrep were
+  *separate* parallel `PostToolUse` hooks (since consolidated). Keep it: the
+  moment any two injectors are wired into one group again, the race is back.
+
+### Other behavioral gotchas that cost real debugging time
+
 - **PostToolUse exit-2 is cosmetic.** The tool already ran; exit 2 only informs
   the model. To actually prevent an action, you must be on **PreToolUse**.
 - **The `if:` field does not support `|` OR syntax** (unlike `matcher`).
@@ -85,7 +110,7 @@ see what still holds.
 ## What's in the repo
 
 ```
-hooks/                 # ~30 vendored hook scripts (the implementations under test)
+hooks/                 # ~20 vendored hook scripts (the implementations under test)
 tests/test_hooks/      # pytest + Hypothesis: logic tests + wiring validation
 probes/                # standalone experiments that discovered the channel behavior above
 fixtures/              # test inputs (fake secrets, unpinned deps, injection payloads)
@@ -100,6 +125,75 @@ TESTING.md             # the live wiring playbook + version-stamped observations
 > secret-scanning hooks are **synthetic** — AWS's documented `EXAMPLE` key,
 > `sk_live_fake…`, PEM *headers* with no key body. They exist to exercise the
 > scanners. There are no real credentials anywhere in this repo or its history.
+
+## The hooks
+
+Every script in [`hooks/`](hooks/), what it does, when it fires, and **which
+channel it uses to convey information** — because, per the findings above, the
+channel is the whole game. The channels used here:
+
+- **Block (exit 2)** — refuses the action with a visible reason (only real on `PreToolUse`).
+- **Startup context** — JSON on SessionStart stdout: `systemMessage` (shown to you) + `additionalContext` (injected into the model).
+- **Model context** — `hookSpecificOutput.additionalContext`, delivered to the model as a `<system-reminder>`.
+- **File rewrite** — edits the target file directly (formatting / lint-fix).
+- **Inline comment** — writes `# HOOK:<TOOL>:` comments into the source at the relevant lines so the model sees them on the next read.
+- **State file** — writes to `.hook_state/` for a companion hook to read later.
+
+These are copies of one developer's real setup; treat them as worked examples,
+not a library.
+
+### SessionStart — once, when a session begins
+
+| Hook | Channel | What it does |
+|---|---|---|
+| `project_health_check.py` | Startup context | Injects a project-health reminder (git state, stale artifacts) into the model's startup context. |
+| `git_pull_on_start.sh` | Startup context | Pulls latest from remote when the tree is clean; warns instead when it's dirty. |
+| `check_dep_freshness.sh` | Startup context | Warns when dependencies haven't been checked recently. |
+| `config_drift_check.sh` | Startup context (plain stdout) | Nudges when `~/.claude` has drifted from the `claude-dotfiles` source repo. |
+
+### PreToolUse — before a tool runs; **can block** (exit 2)
+
+| Hook | Fires on | Channel | What it does |
+|---|---|---|---|
+| `block_read_env.py` | `Read`, `Bash` | Block (exit 2) | Blocks reading `.env` files (points you at `.env.example`). |
+| `block_bare_pip.py` | `Bash` | Block (exit 2) | Blocks bare `pip install` outside a uv/venv environment. |
+| `block_no_verify.py` | `Bash` | Block (exit 2) | Blocks `git commit --no-verify` / `-n` (which would skip the pre-commit gate). |
+| `scan_secrets_on_commit.py` | `Bash` (`git commit*`) | Block (exit 2) | Scans the staged diff for secret patterns and blocks the commit if any match. |
+| `block_git_add_env.py` | `Bash` (`git add*`) | Block (exit 2) | Blocks staging a non-template `.env` file. |
+| `pip_audit_guard.py` | `Bash` | Block (exit 2) | Blocks dependency operations while an unresolved pip-audit vulnerability is on record. |
+| `block_glob_deny_rules.py` | `Edit`, `Write` | Block (exit 2) | Blocks writing overly-broad `**` Read deny rules into `settings.json`. |
+| `check_dependency_pins.py` | `Edit`, `Write` | Block (exit 2) | Blocks adding unpinned dependency versions. |
+| `block_suppressions.py` | `Edit`, `Write` | Block (exit 2) | Blocks unjustified `# type: ignore` / `# noqa` comments. |
+
+### PostToolUse — after a tool runs; informational (can't undo the action)
+
+| Hook | Fires on | Channel | What it does |
+|---|---|---|---|
+| `ruff_format.sh` | `Edit`, `Write` | File rewrite | Auto-formats the edited Python file with `ruff format`. |
+| `pip_audit_check.py` | `Bash` | State file | Runs pip-audit after `uv add`/`uv sync` and records findings for `pip_audit_guard.py`. |
+| `scan_prompt_injection.py` | `WebFetch`, `mcp__*` | Model context | Scans fetched/MCP tool output for prompt-injection patterns and warns the model. |
+
+### Stop — once, when the model finishes a turn
+
+| Hook | Channel | What it does |
+|---|---|---|
+| `ruff_lint.sh` | File rewrite | Runs `ruff check --fix` once across every changed `.py` file. |
+| `batch_checks.sh` | Inline comment | Batch-runs pyright, bandit, semgrep, docstring and seed checks over all changed `.py` files, injecting `# HOOK:<TOOL>:` comments inline. |
+
+### Invoked by `batch_checks.sh` (Stop), not wired individually
+
+| Script | Channel | What it does |
+|---|---|---|
+| `inject_tool_findings.py` | Inline comment | Runs pyright/bandit/semgrep and injects findings as `# HOOK:<TOOL>:` comments (single-file and `--batch` modes). |
+| `check_docstrings.py` | Inline comment | Flags Python functions missing docstrings. |
+| `check_random_seeds.py` | Inline comment | Warns when randomness is used without a fixed seed. |
+
+### Shared libraries — imported by the hooks, not fired directly
+
+| Module | What it does |
+|---|---|
+| `hook_log.py` | Shared debug logger + central outcome recorder (`FIRED`/`BLOCK`/`ALLOW`). |
+| `hook_inject.py` | Shared inline-injection and `.hook_state/` state-file helpers. |
 
 ## Running the tests
 

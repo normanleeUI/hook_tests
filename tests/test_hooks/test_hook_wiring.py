@@ -178,6 +178,16 @@ KNOWN_LIBRARIES: set[str] = {
     "check_random_seeds.py",
 }
 
+# Real hooks that exist on disk but are intentionally NOT wired yet: wiring is an
+# opt-in decision the user makes per hook. Listed here so orphan detection knows
+# they are known, without asserting they must be wired (unlike CANONICAL_HOOKS).
+PENDING_HOOKS: dict[str, str] = {
+    "block_unresolved_findings.py": (
+        "Inline-finding commit gate (Strategy C generalization). Wire as "
+        "PreToolUse/Bash once a detector opts into blocking=True findings."
+    ),
+}
+
 
 def load_settings() -> dict:
     """Load and parse the live Claude settings.json.
@@ -294,7 +304,12 @@ class TestOrphanDetection:
 
     def test_no_unknown_scripts_on_disk(self):
         """Every script in ~/.claude/hooks/ is canonical or deprecated."""
-        known = set(CANONICAL_HOOKS) | set(DEPRECATED_HOOKS) | KNOWN_LIBRARIES
+        known = (
+            set(CANONICAL_HOOKS)
+            | set(DEPRECATED_HOOKS)
+            | set(PENDING_HOOKS)
+            | KNOWN_LIBRARIES
+        )
         on_disk = {
             f.name
             for f in HOOKS_DIR.iterdir()

@@ -226,7 +226,8 @@ class TestCheckDocstrings:
         rc, stderr, stdout = run_hook("check_docstrings.py", _make_payload(str(f)))
         assert rc == 0
         content = f.read_text()
-        assert "# HOOK:DOCSTRING: missing docstring for function 'compute'" in content
+        assert "# HOOK:DOCSTRING:" in content
+        assert "missing docstring for function 'compute'" in content
 
     def test_docstring_no_injection_when_all_documented(self, tmp_path: Path) -> None:
         """File where all functions have docstrings -> no # HOOK:DOCSTRING: in file."""
@@ -456,7 +457,8 @@ class TestCheckRandomSeeds:
         rc, stderr, stdout = run_hook("check_random_seeds.py", _make_payload(str(f)))
         assert rc == 0
         content = f.read_text()
-        assert "# HOOK:SEED: random module used without seed" in content
+        assert "# HOOK:SEED:" in content
+        assert "random module used without seed" in content
 
     def test_seeds_no_injection_when_seeded(self, tmp_path: Path) -> None:
         """File with import random + random.seed(42) -> no # HOOK:SEED: in file."""

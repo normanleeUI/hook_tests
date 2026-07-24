@@ -52,8 +52,21 @@ class TestInjectAtLine:
     def test_inject_at_line_inserts_before_target(self):
         lines = ["line1\n", "line2\n", "line3\n"]
         inject_at_line(lines, 2, "TEST", "found issue")
-        assert lines[1] == "# HOOK:TEST: found issue\n"
+        # Full format contract: prefix (for self-cleaning) + guardrail framing that
+        # the heed-rate probe showed lifts acknowledgement (see HEED_PROBE.md).
+        assert lines[1] == (
+            "# HOOK:TEST: [automated guardrail] found issue "
+            "-- fix or explicitly acknowledge before continuing; re-inserted until resolved\n"
+        )
         assert lines[2] == "line2\n"
+
+    def test_inject_at_line_keeps_self_cleaning_prefix(self):
+        """The reframed comment must still start with `# HOOK:{name}:` so
+        remove_hook_comments() strips it on the next run (no stale accumulation)."""
+        lines = ["x\n"]
+        inject_at_line(lines, 1, "BANDIT", "[B105] secret")
+        assert lines[0].startswith("# HOOK:BANDIT:")
+        assert lines[0].endswith("\n") and lines[0].count("\n") == 1  # single line
 
     def test_inject_at_line_preserves_all_content(self):
         original = ["line1\n", "line2\n", "line3\n"]
@@ -101,9 +114,17 @@ class TestReadCleanWrite:
         read_clean_write(str(f), "TEST", analyzer)
 
         result_lines = f.read_text().splitlines(keepends=True)
-        assert result_lines[0] == "# HOOK:TEST: issue at line 1\n"
+        # This test pins line ORDERING, not comment wording: assert the prefix and
+        # the finding text land at the right positions (format is contracted above).
+        assert (
+            result_lines[0].startswith("# HOOK:TEST:")
+            and "issue at line 1" in result_lines[0]
+        )
         assert result_lines[1] == "aaa\n"
-        assert result_lines[3] == "# HOOK:TEST: issue at line 3\n"
+        assert (
+            result_lines[3].startswith("# HOOK:TEST:")
+            and "issue at line 3" in result_lines[3]
+        )
         assert result_lines[4] == "ccc\n"
         assert len(result_lines) == 5
 

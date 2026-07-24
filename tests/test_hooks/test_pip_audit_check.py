@@ -25,6 +25,7 @@ The hook has two sequential gates:
 Only when both gates pass does the hook engage and run ``uvx pip-audit``.
 """
 
+import hashlib
 import json as json_mod
 import os
 import subprocess
@@ -101,6 +102,39 @@ def _run_hook_raw_stdin(raw_stdin: str, timeout: int = 10) -> tuple[int, str, st
         env=os.environ,
     )
     return result.returncode, result.stderr, result.stdout
+
+
+def make_fake_uv_bin(
+    tmp_path,
+    exit_code: int,
+    stdout: str = "",
+    stderr: str = "",
+    export_out: str = "flask==1.0\n",
+    argv_dump: str | None = None,
+):
+    """Create fake ``uv`` (handles ``export``) and ``uvx`` (pip-audit) on one PATH dir.
+
+    The hook now audits the *exported project lockfile* (``uv export`` ->
+    ``uvx pip-audit -r``), because bare ``uvx pip-audit`` audits uvx's isolated
+    env, not the project. So the fake ``uv export`` must yield non-empty deps or
+    the hook short-circuits. ``argv_dump`` (a path) captures uvx's argv so a test
+    can assert pip-audit was pointed at the exported requirements (regression
+    guard against the "0 packages audited" bug).
+    """
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir(exist_ok=True)
+    (fake_bin / "uv").write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "export" ]; then printf %s ' + repr(export_out) + "; exit 0; fi\n"
+        "exit 0\n"
+    )
+    dump = f'printf "%s" "$*" > {argv_dump}\n' if argv_dump else ""
+    (fake_bin / "uvx").write_text(
+        f"#!/bin/sh\n{dump}echo '{stdout}'\necho '{stderr}' >&2\nexit {exit_code}\n"
+    )
+    (fake_bin / "uv").chmod(0o755)
+    (fake_bin / "uvx").chmod(0o755)
+    return str(fake_bin)
 
 
 class TestPipAuditCheckExamples:
@@ -276,26 +310,21 @@ class TestPipAuditCheckSubprocessResults:
     Uses a fake ``uvx`` script to test without network access.
     """
 
-    @staticmethod
-    def _make_fake_uvx(tmp_path, exit_code: int, stdout: str = "", stderr: str = ""):
-        """Create a fake 'uvx' script that returns the given exit code."""
-        fake_uvx = tmp_path / "uvx"
-        fake_uvx.write_text(
-            f"#!/bin/sh\necho '{stdout}'\necho '{stderr}' >&2\nexit {exit_code}\n"
-        )
-        fake_uvx.chmod(0o755)
-        return str(tmp_path)
-
     def test_audit_clean_returns_zero(self, post_tool_payload, tmp_path):
         """When pip-audit exits 0 (clean), hook should return 0."""
-        fake_bin = self._make_fake_uvx(tmp_path, 0, stdout="pkg1\npkg2\npkg3")
-        # PATH: fake bin first (for uvx), then real bins (for python)
+        fake_bin = make_fake_uv_bin(tmp_path, 0, stdout="pkg1\npkg2\npkg3")
+        # PATH: fake bin first (for uv/uvx), then real bins (for python).
+        # HOOK_STATE_DIR pins state to tmp_path so the hook never writes into the
+        # real repo .hook_state (that leak left a stale fake-vuln report before).
         real_path = os.environ.get("PATH", "")
         payload = post_tool_payload("uv add requests")
         code, stderr, _ = run_hook(
             HOOK,
             payload,
-            env={"PATH": f"{fake_bin}:{real_path}"},
+            env={
+                "PATH": f"{fake_bin}:{real_path}",
+                "HOOK_STATE_DIR": str(tmp_path / ".hook_state"),
+            },
             timeout=15,
         )
         assert code == 0
@@ -307,7 +336,7 @@ class TestPipAuditCheckSubprocessResults:
         Blocking is handled by the companion guard hook (pip_audit_guard.py)
         via the state file, not by exit code on PostToolUse.
         """
-        fake_bin = self._make_fake_uvx(
+        fake_bin = make_fake_uv_bin(
             tmp_path,
             1,
             stdout="pkg1  1.0  CVE-2024-1234",
@@ -318,7 +347,10 @@ class TestPipAuditCheckSubprocessResults:
         code, stderr, _ = run_hook(
             HOOK,
             payload,
-            env={"PATH": f"{fake_bin}:{real_path}"},
+            env={
+                "PATH": f"{fake_bin}:{real_path}",
+                "HOOK_STATE_DIR": str(tmp_path / ".hook_state"),
+            },
             timeout=15,
         )
         assert code == 0, (
@@ -336,17 +368,9 @@ class TestPipAuditCheckStateFile:
     deleted so the guard stops blocking.
     """
 
-    @staticmethod
-    def _make_fake_uvx(tmp_path, exit_code: int, stdout: str = "", stderr: str = ""):
-        """Create a fake 'uvx' script that returns the given exit code."""
-        fake_bin = tmp_path / "fake_bin"
-        fake_bin.mkdir(exist_ok=True)
-        fake_uvx = fake_bin / "uvx"
-        fake_uvx.write_text(
-            f"#!/bin/sh\necho '{stdout}'\necho '{stderr}' >&2\nexit {exit_code}\n"
-        )
-        fake_uvx.chmod(0o755)
-        return str(fake_bin)
+    _make_fake_uvx = staticmethod(
+        make_fake_uv_bin
+    )  # audits exported deps, not bare env
 
     def _run_with_state_dir(
         self,
@@ -445,17 +469,9 @@ class TestPipAuditCheckRealPayloadSchema:
     fake ``uvx`` on PATH stands in for the real network call.
     """
 
-    @staticmethod
-    def _make_fake_uvx(tmp_path, exit_code: int, stdout: str = "", stderr: str = ""):
-        """Create a fake 'uvx' on PATH that returns the given exit code."""
-        fake_bin = tmp_path / "fake_bin"
-        fake_bin.mkdir(exist_ok=True)
-        fake_uvx = fake_bin / "uvx"
-        fake_uvx.write_text(
-            f"#!/bin/sh\necho '{stdout}'\necho '{stderr}' >&2\nexit {exit_code}\n"
-        )
-        fake_uvx.chmod(0o755)
-        return str(fake_bin)
+    _make_fake_uvx = staticmethod(
+        make_fake_uv_bin
+    )  # audits exported deps, not bare env
 
     def _run(self, payload, tmp_path, exit_code, stdout="", stderr_text=""):
         fake_bin = self._make_fake_uvx(tmp_path, exit_code, stdout, stderr_text)
@@ -534,3 +550,196 @@ class TestPipAuditCheckRealPayloadSchema:
         assert code == 0
         assert "[pip-audit]" not in stderr
         assert not report.exists()
+
+
+class TestUvRunCoverage:
+    """`uv run` implicitly re-syncs the env from uv.lock but fires on nearly every
+    command -- audit it only when the lockfile's content actually changed. Closes
+    the gap where deps arrive via `uv run` and no watched install command ever runs.
+
+    Setup keys on HOOK_STATE_DIR: the hook resolves uv.lock as the state dir's
+    parent / "uv.lock", so a lock dropped in tmp_path is what the hook hashes.
+    """
+
+    _fake_uvx = staticmethod(make_fake_uv_bin)  # audits exported deps, not bare env
+
+    def _run(
+        self,
+        post_tool_payload,
+        tmp_path,
+        command,
+        exit_code,
+        lock_content=None,
+        stored_hash=None,
+        stdout="",
+        stderr_text="",
+    ):
+        state_dir = tmp_path / ".hook_state"
+        if lock_content is not None:
+            (tmp_path / "uv.lock").write_text(lock_content)
+        if stored_hash is not None:
+            (state_dir / "pip_audit").mkdir(parents=True, exist_ok=True)
+            (state_dir / "pip_audit" / "last_lock_hash").write_text(stored_hash)
+        fake_bin = self._fake_uvx(tmp_path, exit_code, stdout, stderr_text)
+        code, stderr, _ = run_hook(
+            HOOK,
+            post_tool_payload(command),
+            env={
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "HOOK_STATE_DIR": str(state_dir),
+            },
+            timeout=15,
+        )
+        return code, stderr, state_dir
+
+    def test_uv_run_audits_when_no_prior_audit(self, post_tool_payload, tmp_path):
+        """First `uv run` in a project (no stored hash) audits the current lock."""
+        _, stderr, state_dir = self._run(
+            post_tool_payload,
+            tmp_path,
+            "uv run pytest",
+            exit_code=1,
+            lock_content="lockA\n",
+            stdout="pkg1 1.0 CVE-2024-1",
+            stderr_text="VULNS",
+        )
+        assert "[pip-audit]" in stderr, "uv run should engage the audit on first sight"
+        assert (state_dir / "pip_audit" / "report.json").exists()
+
+    def test_uv_run_skips_when_lock_unchanged(self, post_tool_payload, tmp_path):
+        """Lock matches the last-audited hash -> no audit (the cheap common case)."""
+        content = "lockA\n"
+        matching = hashlib.sha256(content.encode()).hexdigest()
+        _, stderr, state_dir = self._run(
+            post_tool_payload,
+            tmp_path,
+            "uv run pytest",
+            exit_code=1,  # would create a report IF it ran
+            lock_content=content,
+            stored_hash=matching,
+            stderr_text="VULNS",
+        )
+        assert "[pip-audit]" not in stderr, "unchanged lock must not trigger an audit"
+        assert not (state_dir / "pip_audit" / "report.json").exists()
+
+    def test_uv_run_audits_when_lock_changed(self, post_tool_payload, tmp_path):
+        """Lock differs from the stored hash -> deps moved -> audit runs."""
+        stale = hashlib.sha256(b"OLD\n").hexdigest()
+        _, stderr, state_dir = self._run(
+            post_tool_payload,
+            tmp_path,
+            "cd sub && PYTHONPATH=. uv run python app.py",  # realistic compound cmd
+            exit_code=1,
+            lock_content="NEW-RESOLVED-DEPS\n",
+            stored_hash=stale,
+            stderr_text="VULNS",
+        )
+        assert "[pip-audit]" in stderr, "changed lock must trigger an audit"
+        assert (state_dir / "pip_audit" / "report.json").exists()
+
+    def test_uv_run_no_lockfile_is_noop(self, post_tool_payload, tmp_path):
+        """No uv.lock at the project root -> nothing to audit, clean exit."""
+        code, stderr, state_dir = self._run(
+            post_tool_payload,
+            tmp_path,
+            "uv run pytest",
+            exit_code=1,
+            lock_content=None,
+            stderr_text="VULNS",
+        )
+        assert code == 0
+        assert "[pip-audit]" not in stderr
+        assert not (state_dir / "pip_audit" / "report.json").exists()
+
+    def test_uv_add_still_audits_even_when_lock_hash_matches(
+        self, post_tool_payload, tmp_path
+    ):
+        """Regression: explicit install commands ignore the hash gate and always
+        audit -- an unconditional, robust signal that deps changed."""
+        content = "lockA\n"
+        matching = hashlib.sha256(content.encode()).hexdigest()
+        _, stderr, state_dir = self._run(
+            post_tool_payload,
+            tmp_path,
+            "uv add requests",
+            exit_code=1,
+            lock_content=content,
+            stored_hash=matching,
+            stderr_text="VULNS",
+        )
+        assert "[pip-audit]" in stderr
+        assert (state_dir / "pip_audit" / "report.json").exists()
+
+    def test_clean_audit_records_lock_hash_for_next_skip(
+        self, post_tool_payload, tmp_path
+    ):
+        """After auditing, the current lock hash is recorded so the next identical
+        `uv run` skips cheaply."""
+        content = "lockA\n"
+        self._run(
+            post_tool_payload,
+            tmp_path,
+            "uv run pytest",
+            exit_code=0,  # clean audit
+            lock_content=content,
+            stdout="pkg1\npkg2",
+        )
+        recorded = (
+            tmp_path / ".hook_state" / "pip_audit" / "last_lock_hash"
+        ).read_text()
+        assert recorded.strip() == hashlib.sha256(content.encode()).hexdigest()
+
+
+class TestPipAuditAuditsProjectDeps:
+    """Regression guard for the "0 packages audited" bug.
+
+    Bare ``uvx pip-audit`` audits uvx's isolated tool env, not the project, so a
+    known-vulnerable pin came back clean. The hook must instead export the
+    project's locked deps and audit THAT (``uvx pip-audit -r <exported>``).
+    These tests would fail against the old bare-uvx invocation.
+    """
+
+    def test_pip_audit_receives_exported_project_requirements(
+        self, post_tool_payload, tmp_path
+    ):
+        argv_dump = tmp_path / "uvx_argv.txt"
+        fake_bin = make_fake_uv_bin(
+            tmp_path,
+            0,
+            stdout="ok",
+            export_out="SENTINEL_DEP==9.9\n",
+            argv_dump=str(argv_dump),
+        )
+        code, _, _ = run_hook(
+            HOOK,
+            post_tool_payload("uv sync"),
+            env={
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "HOOK_STATE_DIR": str(tmp_path / ".hook_state"),
+            },
+            timeout=15,
+        )
+        assert code == 0
+        argv = argv_dump.read_text().split()
+        assert "-r" in argv, f"pip-audit must audit a requirements file, got: {argv!r}"
+        reqs_path = argv[argv.index("-r") + 1]
+        assert "SENTINEL_DEP" in Path(reqs_path).read_text(), (
+            "pip-audit must be pointed at the EXPORTED project deps, not the bare env"
+        )
+
+    def test_empty_export_reports_nothing_to_audit(self, post_tool_payload, tmp_path):
+        """No exportable deps -> hook reports 'nothing to audit' and writes no
+        report (it must NOT fall through to a bare-env audit)."""
+        fake_bin = make_fake_uv_bin(tmp_path, 1, export_out="", stderr="VULNS")
+        code, stderr, _ = run_hook(
+            HOOK,
+            post_tool_payload("uv sync"),
+            env={
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "HOOK_STATE_DIR": str(tmp_path / ".hook_state"),
+            },
+            timeout=15,
+        )
+        assert code == 0
+        assert "nothing to audit" in stderr
+        assert not (tmp_path / ".hook_state" / "pip_audit" / "report.json").exists()

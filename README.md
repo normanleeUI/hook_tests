@@ -92,6 +92,51 @@ run in parallel. Two caveats worth stating honestly:
 - **`hookEventName` is required inside `hookSpecificOutput`** but undocumented —
   omit it and the whole output is discarded.
 
+### Delivering a comment is not the same as getting it heeded
+
+The inline `# HOOK:<TOOL>:` channel is the most *reliable delivery* path (a real
+file on disk) and the *weakest compliance* one. Delivery and compliance are
+independent axes, and only the first is a channel property — the second is
+discretionary. A bare diagnostic comment (`# HOOK:BANDIT: [B105] hardcoded
+password`) reads as pre-existing churn: in a controlled probe
+([`probes/HEED_PROBE.md`](probes/HEED_PROBE.md)), agents given an unrelated edit
+task **ignored it 3/3**, editing right past a real finding.
+
+Reframing the *same* finding on the *same* channel — an addressed imperative
+with provenance (`[automated guardrail]`) and a truthful consequence
+(`re-inserted until resolved`) — moved acknowledgement to **6/6** in a fresh
+run, with a 3/3-ignored bare control alongside (rules out session drift). The
+change is one shared construction point,
+[`hooks/hook_inject.py`](hooks/hook_inject.py) `inject_at_line()`, so every
+injector inherits it. Ceiling worth stating: a passive comment tops out at
+*acknowledgement* — agents still (correctly) decline to fix an out-of-scope
+finding. Forcing the fix needs an active gate (a PreToolUse block), not better
+words.
+
+### pip-audit was auditing the wrong environment — and missed `uv run` entirely
+
+Two independent defects that together meant the dependency audit was effectively
+inert, both found by driving the hook end-to-end against a known-vulnerable pin
+(`jinja2==2.11.2`):
+
+- **Bare `uvx pip-audit` audits uvx's *isolated* tool env, not your project.** A
+  vulnerable pin came back `All dependencies clean (0 packages audited)` — every
+  "clean" it ever reported was auditing nothing. Fix: export the locked deps and
+  audit *that* (`uv export … | uvx pip-audit -r <file>`), which correctly flags
+  all 5 `jinja2` advisories. The old unit tests passed against this broken hook
+  because they mocked `uvx` away and never checked *what* it audited — the
+  regression test now asserts pip-audit is pointed at the exported deps.
+- **The trigger missed `uv run`.** The hook only fired on `uv add`/`uv
+  sync`/`uv pip install`, but `uv run` implicitly re-syncs the env from the
+  lockfile — so a project whose whole session used only `uv run` (the common
+  case) was never audited. Fix: also trigger on `uv run`, gated on `uv.lock`'s
+  content actually changing (sha256) so the constant `uv run` calls stay a cheap
+  no-op. See [`hooks/pip_audit_check.py`](hooks/pip_audit_check.py).
+
+Compounding both, a clean audit reports via **stderr on exit 0** — an invisible
+channel (see the table above) — so even a *working* audit says nothing you can
+see; the state file is the real signal.
+
 ### Version-sensitive — read this before trusting the above
 
 Claude Code's hook behavior **changes between versions.** These findings were

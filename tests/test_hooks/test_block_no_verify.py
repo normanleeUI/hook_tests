@@ -22,8 +22,8 @@ class TestBlockNoVerify:
     def test_normal_git_commit_exits_0(self) -> None:
         code, stderr, _ = run_hook(HOOK, _payload("git commit -m x"))
         assert code == 0
-        assert "PASSED" in stderr
-
+        assert stderr.strip() == ""  # silent on pass — no alert-fatigue noise
+        
     def test_git_C_commit_no_verify_is_blocked(self) -> None:
         """The bypass class: --no-verify anywhere in the command is caught,
         including the `git -C .` form that dodges prefix matchers."""

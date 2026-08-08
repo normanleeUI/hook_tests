@@ -176,6 +176,9 @@ KNOWN_LIBRARIES: set[str] = {
     # Called by batch_checks.sh, not individually wired
     "check_docstrings.py",
     "check_random_seeds.py",
+    # On-demand scaffold tool: offered by project_health_check, run by the
+    # model only on user acceptance. Never wired to an event by design.
+    "scaffold_project.py",
 }
 
 # Real hooks that exist on disk but are intentionally NOT wired yet: wiring is an

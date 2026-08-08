@@ -6,8 +6,13 @@ to test hooks so you find out *before* you rely on one. It ships:
 
 - **A reference table of empirically-verified hook channel behavior** (below) —
   the reusable takeaway, even if you never run the code.
-- **~20 real hook scripts** in [`hooks/`](hooks/) (security guards, linters,
-  injection scanners) you can read or adapt — see [the table below](#the-hooks).
+- **A reference table of ~20 real hooks** (security guards, linters, injection
+  scanners) — see [the table below](#the-hooks). The vendored copies were
+  removed 2026-08-07 after drifting from the live implementations under test
+  (the harness runs hooks from `~/.claude/hooks` via `HOOKS_DIR`, so the local
+  copies were a stale edit-the-wrong-file trap); they remain in git history.
+  [`hooks/`](hooks/) now holds only the unshipped `block_unresolved_findings.py`
+  commit gate and its two helpers.
 - **A pytest/Hypothesis harness** (`tests/test_hooks/`) that verifies both hook
   *logic* (does the script decide correctly?) and hook *wiring* (does Claude
   Code actually fire it?).
@@ -155,7 +160,7 @@ see what still holds.
 ## What's in the repo
 
 ```
-hooks/                 # ~20 vendored hook scripts (the implementations under test)
+hooks/                 # only the unshipped commit-gate trio; vendored copies removed 2026-08-07 (see git history)
 tests/test_hooks/      # pytest + Hypothesis: logic tests + wiring validation
 probes/                # standalone experiments that discovered the channel behavior above
 fixtures/              # test inputs (fake secrets, unpinned deps, injection payloads)
@@ -173,7 +178,7 @@ TESTING.md             # the live wiring playbook + version-stamped observations
 
 ## The hooks
 
-Every script in [`hooks/`](hooks/), what it does, when it fires, and **which
+Every hook in the tested setup — what it does, when it fires, and **which
 channel it uses to convey information** — because, per the findings above, the
 channel is the whole game. The channels used here:
 
@@ -184,7 +189,7 @@ channel is the whole game. The channels used here:
 - **Inline comment** — writes `# HOOK:<TOOL>:` comments into the source at the relevant lines so the model sees them on the next read.
 - **State file** — writes to `.hook_state/` for a companion hook to read later.
 
-These are copies of one developer's real setup; treat them as worked examples,
+These document one developer's real setup; treat them as worked examples,
 not a library.
 
 ### SessionStart — once, when a session begins

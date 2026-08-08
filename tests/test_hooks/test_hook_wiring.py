@@ -86,13 +86,13 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "event": "PreToolUse",
         "interpreter": "python3",
         "matcher": "Bash",
-        "if_condition": "Bash(git commit*)",
+        "if_condition": None,
     },
     "block_git_add_env.py": {
         "event": "PreToolUse",
         "interpreter": "python3",
         "matcher": "Bash",
-        "if_condition": "Bash(git add*)",
+        "if_condition": None,
     },
     "pip_audit_guard.py": {
         "event": "PreToolUse",

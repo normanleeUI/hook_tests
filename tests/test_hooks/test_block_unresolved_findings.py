@@ -16,6 +16,15 @@ from tests.test_hooks.hook_runner import HOOKS_DIR, run_hook
 
 HOOK = "block_unresolved_findings.py"
 
+# Decision 2026-08-07 (TODO #11d fork): the gate stays dormant — the git
+# pre-commit migration (#11) covers commit gating at a stronger layer. The
+# hook file and its hook_inject support ship together, so file existence is
+# the "has it been ported?" signal; these tests wake up if that ever happens.
+pytestmark = pytest.mark.skipif(
+    not (HOOKS_DIR / HOOK).exists(),
+    reason="dormant commit gate not ported to live hooks (see claude-config TODO #11d)",
+)
+
 
 @pytest.fixture
 def state_dir(tmp_path):

@@ -29,7 +29,7 @@ phc = pytest.importorskip("project_health_check")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-ALL_ITEMS = {"git", "venv", "deps", "gitignore", "readme", "hooks", "ci"}
+ALL_ITEMS = {"git", "venv", "deps", "gitignore", "readme", "claude-md", "hooks", "ci"}
 
 
 def _init_git_repo(path: Path) -> None:
@@ -62,6 +62,8 @@ def _make_project(path: Path, items: set[str]) -> None:
         (path / ".gitignore").write_text(".venv/\n")
     if "readme" in items:
         (path / "README.md").write_text("# project\n")
+    if "claude-md" in items:
+        (path / "CLAUDE.md").write_text("# spec\n")
     if "hooks" in items:
         (path / ".claude").mkdir(exist_ok=True)
         (path / ".claude" / "settings.json").write_text("{}")

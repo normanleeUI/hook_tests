@@ -190,7 +190,8 @@ class TestRuffLint:
         run_bash_hook("ruff_lint.sh", {}, env=env, cwd=str(tmp_path))
 
         log = _read_log(log_file)
-        assert "ruff check --fix" in log
+        # T20 (flake8-print) added 2026-08-03 to close the print-vs-logging gap
+        assert "ruff check --extend-select T20 --fix" in log
         assert "app.py" in log, "ruff should have been passed the changed file"
 
     def test_noops_without_git(self, fake_tool_env, tmp_path):

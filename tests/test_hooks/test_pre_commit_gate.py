@@ -52,6 +52,14 @@ def _init_git_repo(repo_path: Path) -> None:
     dest = repo_path / ".git" / "hooks" / "pre-commit"
     dest.write_text(HOOK_SRC.read_text())
     dest.chmod(0o755)
+    # The live environment sets a GLOBAL core.hooksPath (~/.claude/githooks),
+    # which silently shadows per-repo .git/hooks — the hook under test would
+    # never fire. A local hooksPath beats global, so pin it to .git/hooks.
+    subprocess.run(
+        ["git", "-C", str(repo_path), "config", "core.hooksPath", ".git/hooks"],
+        check=True,
+        capture_output=True,
+    )
 
 
 def _stage_file(repo_path: Path, filename: str, content: str) -> None:

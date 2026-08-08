@@ -18,8 +18,9 @@ are found, findings are persisted to ``.hook_state/pip_audit/report.json``
 so the companion guard hook (``pip_audit_guard.py``) can block future ops.
 
 The hook has two sequential gates:
-  1. Command substring check -- must contain ``uv add``, ``uv sync``, or
-     ``uv pip install``.
+  1. Command check -- ``uv add``, ``uv sync``, or ``uv pip install`` in
+     COMMAND POSITION (start of string or after a shell connector), so prose
+     mentions (heredoc commit messages, echo strings) do not trigger.
   2. Interruption check -- ``tool_response.interrupted`` must be falsy.
 
 Only when both gates pass does the hook engage and run ``uvx pip-audit``.
@@ -326,6 +327,64 @@ class TestPipAuditCheckGateEngagement:
         assert "[pip-audit]" in stderr, (
             "Hook should engage for 'uv pip install' command"
         )
+
+
+class TestPipAuditCheckCommandPosition:
+    """Regression: dep commands must match in COMMAND POSITION only.
+
+    A plain substring match once treated prose as a command -- the companion
+    guard blocked a `git commit` because the heredoc commit MESSAGE contained
+    "uv add". Command position = start of string or after a shell connector
+    (&&, ||, ;, |, newline, $(, backtick), optionally with env-var prefixes.
+    """
+
+    def _run(self, post_tool_payload, tmp_path, command):
+        """Run the hook with a fake clean-audit uvx; return (code, stderr)."""
+        fake_bin = make_fake_uv_bin(tmp_path, 0, stdout=CLEAN_JSON)
+        code, stderr, _ = run_hook(
+            HOOK,
+            post_tool_payload(command),
+            env={
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "HOOK_STATE_DIR": str(tmp_path / ".hook_state"),
+            },
+            timeout=15,
+        )
+        return code, stderr
+
+    def test_heredoc_commit_message_mentioning_uv_add_skips(
+        self, post_tool_payload, tmp_path
+    ):
+        command = (
+            "git commit -m \"$(cat <<'EOF'\n"
+            "Pin semgrep and explain why we ran uv add requests earlier\n"
+            "EOF\n"
+            ')"'
+        )
+        code, stderr = self._run(post_tool_payload, tmp_path, command)
+        assert code == 0
+        assert "[pip-audit]" not in stderr, "Prose in a commit message must not engage"
+
+    def test_echo_string_mentioning_uv_sync_skips(self, post_tool_payload, tmp_path):
+        code, stderr = self._run(
+            post_tool_payload, tmp_path, 'echo "run uv sync later"'
+        )
+        assert code == 0
+        assert "[pip-audit]" not in stderr, "Quoted prose must not engage the audit"
+
+    def test_plain_uv_add_engages(self, post_tool_payload, tmp_path):
+        _, stderr = self._run(post_tool_payload, tmp_path, "uv add requests")
+        assert "[pip-audit]" in stderr
+
+    def test_uv_sync_after_connector_engages(self, post_tool_payload, tmp_path):
+        _, stderr = self._run(post_tool_payload, tmp_path, "cd proj && uv sync")
+        assert "[pip-audit]" in stderr
+
+    def test_uv_pip_install_requirements_engages(self, post_tool_payload, tmp_path):
+        _, stderr = self._run(
+            post_tool_payload, tmp_path, "uv pip install -r requirements.txt"
+        )
+        assert "[pip-audit]" in stderr
 
 
 class TestPipAuditCheckSubprocessResults:
@@ -744,6 +803,10 @@ class TestPipAuditAuditsProjectDeps:
             env={
                 "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
                 "HOOK_STATE_DIR": str(tmp_path / ".hook_state"),
+                # The hook writes its exported reqs to a FIXED name under
+                # $TMPDIR; under xdist (-n6) parallel tests stomp that shared
+                # file between this test's hook run and its read. Isolate it.
+                "TMPDIR": str(tmp_path),
             },
             timeout=15,
         )

@@ -123,6 +123,64 @@ class TestPipAuditGuard:
         assert code == 2, f"Guard should block 'uv pip install', got exit {code}"
         assert "vulnerabilit" in stderr.lower()
 
+    def test_guard_ignores_uv_add_in_heredoc_commit_message(
+        self, pre_tool_payload, state_dir, tmp_path
+    ):
+        """Regression: dep commands must match in COMMAND POSITION only.
+
+        A real incident: the guard blocked a `git commit` because the heredoc
+        commit MESSAGE contained the words "uv add". Prose is not a command.
+        """
+        _create_state_file(state_dir)
+        command = (
+            "git commit -m \"$(cat <<'EOF'\n"
+            "Pin semgrep and explain why we ran uv add requests earlier\n"
+            "EOF\n"
+            ')"'
+        )
+        code, _, _ = run_hook(
+            HOOK,
+            pre_tool_payload(command),
+            env={"HOOK_STATE_DIR": str(state_dir)},
+        )
+        assert code == 0, "Prose 'uv add' in a commit message must not be blocked"
+
+    def test_guard_ignores_uv_sync_in_echo_string(
+        self, pre_tool_payload, state_dir, tmp_path
+    ):
+        """'uv sync' quoted inside an echo string is prose, not a command."""
+        _create_state_file(state_dir)
+        code, _, _ = run_hook(
+            HOOK,
+            pre_tool_payload('echo "run uv sync later"'),
+            env={"HOOK_STATE_DIR": str(state_dir)},
+        )
+        assert code == 0, "Quoted prose mentioning 'uv sync' must not be blocked"
+
+    def test_guard_blocks_uv_sync_after_connector(
+        self, pre_tool_payload, state_dir, tmp_path
+    ):
+        """Command position includes after && -- 'cd proj && uv sync' blocks."""
+        _create_state_file(state_dir)
+        code, _, _ = run_hook(
+            HOOK,
+            pre_tool_payload("cd proj && uv sync"),
+            env={"HOOK_STATE_DIR": str(state_dir)},
+        )
+        assert code == 2, "'uv sync' after && is a real dep command"
+
+    def test_guard_blocks_uv_pip_install_with_requirements_flag(
+        self, pre_tool_payload, state_dir, tmp_path
+    ):
+        """'uv pip install -r requirements.txt' at start of string blocks."""
+        _create_state_file(state_dir)
+        code, _, _ = run_hook(
+            HOOK,
+            pre_tool_payload("uv pip install -r requirements.txt"),
+            env={"HOOK_STATE_DIR": str(state_dir)},
+        )
+        assert code == 2
+
     def test_guard_allows_after_state_cleared(
         self, pre_tool_payload, state_dir, tmp_path
     ):

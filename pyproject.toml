@@ -32,6 +32,4 @@ markers = [
 exclude = ["src/has_suppressions.py"]
 
 [dependency-groups]
-dev = [
-    "semgrep>=1.169.0",
-]
+dev = []

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -150,6 +151,52 @@ class TestRuffFormat:
         log = _read_log(log_file)
         assert log == "", "ruff should not be invoked when file_path is missing"
 
+    def test_skips_collab_project_file(self, fake_tool_env, tmp_path):
+        """Files under a collab/ path component are never auto-formatted
+        (global rule: don't reformat code you don't own). Mirrors
+        project_health_check.detect_category(): 'collab' in path parts."""
+        env, log_file = fake_tool_env
+        proj = tmp_path / "collab" / "team_project"
+        proj.mkdir(parents=True)
+        py_file = proj / "module.py"
+        py_file.write_text("x=1\n")
+
+        rc, stderr, stdout = run_bash_hook(
+            "ruff_format.sh", edit_payload(str(py_file)), env=env
+        )
+
+        log = _read_log(log_file)
+        assert log == "", "ruff should not be invoked for collab-project files"
+        assert rc == 0
+
+    def test_formats_solo_project_file(self, fake_tool_env, tmp_path):
+        """Files under solo/ (or any non-collab path) keep current behavior."""
+        env, log_file = fake_tool_env
+        proj = tmp_path / "solo" / "my_project"
+        proj.mkdir(parents=True)
+        py_file = proj / "module.py"
+        py_file.write_text("x=1\n")
+
+        run_bash_hook("ruff_format.sh", edit_payload(str(py_file)), env=env)
+
+        log = _read_log(log_file)
+        assert "uvx ruff format" in log
+        assert str(py_file) in log
+
+    def test_collab_substring_dir_still_formatted(self, fake_tool_env, tmp_path):
+        """A dir merely containing 'collab' as a substring is NOT a collab
+        project — only an exact path component gates, matching detect_category."""
+        env, log_file = fake_tool_env
+        proj = tmp_path / "collaboration_tools"
+        proj.mkdir()
+        py_file = proj / "module.py"
+        py_file.write_text("x=1\n")
+
+        run_bash_hook("ruff_format.sh", edit_payload(str(py_file)), env=env)
+
+        log = _read_log(log_file)
+        assert "uvx ruff format" in log
+
 
 # ── ruff_lint.sh ────────────────────────────────────────────────────────────
 
@@ -202,6 +249,64 @@ class TestRuffLint:
 
         log = _read_log(log_file)
         assert log == "", "ruff_lint should no-op outside a git repo"
+
+    def _setup_repo_with_real_ruff(self, tmp_path):
+        """Init a repo whose .venv/bin/ruff is the REAL ruff, not a stub.
+
+        E722 blocking depends on real ruff output (file:line + rule code),
+        so a logging stub would only test our own assumptions.
+        """
+        _init_git_repo(tmp_path)
+        real_ruff = shutil.which("ruff")
+        if real_ruff is None:
+            pytest.skip("real ruff not found on PATH")
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "ruff").symlink_to(real_ruff)
+
+    def _commit_then_rewrite(self, tmp_path, content):
+        """Commit a clean app.py, then rewrite it so it shows in git diff."""
+        py_file = tmp_path / "app.py"
+        py_file.write_text("x = 1\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "app.py"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "add app"],
+            check=True,
+            capture_output=True,
+        )
+        py_file.write_text(content)
+
+    def test_blocks_on_bare_except(self, fake_tool_env, tmp_path):
+        """A remaining bare except (E722) blocks with exit 2 (Tier-2 #8)."""
+        env, _ = fake_tool_env
+        self._setup_repo_with_real_ruff(tmp_path)
+        self._commit_then_rewrite(tmp_path, "try:\n    x = 1\nexcept:\n    pass\n")
+
+        rc, stderr, stdout = run_bash_hook(
+            "ruff_lint.sh", {}, env=env, cwd=str(tmp_path)
+        )
+
+        assert rc == 2, f"bare except should block, got rc={rc} (stderr: {stderr})"
+        assert "E722" in stderr
+        assert "app.py" in stderr, "block message should name the offending file"
+
+    def test_clean_file_not_blocked(self, fake_tool_env, tmp_path):
+        """A changed file with no E722 violation exits 0 (no false block)."""
+        env, _ = fake_tool_env
+        self._setup_repo_with_real_ruff(tmp_path)
+        self._commit_then_rewrite(
+            tmp_path, "try:\n    x = 1\nexcept ValueError:\n    pass\n"
+        )
+
+        rc, stderr, stdout = run_bash_hook(
+            "ruff_lint.sh", {}, env=env, cwd=str(tmp_path)
+        )
+
+        assert rc == 0, f"clean file should not block (stderr: {stderr})"
 
 
 # ── git_pull_on_start.sh ───────────────────────────────────────────────────

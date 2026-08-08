@@ -137,6 +137,32 @@ def make_fake_uv_bin(
     return str(fake_bin)
 
 
+def audit_json(vuln_ids=()) -> str:
+    """pip-audit ``-f json`` output for the fake uvx to emit.
+
+    The hook now decides vulns-vs-clean by parsing this JSON (exit code alone
+    can't distinguish "vulns found" from "audit couldn't run"), so fakes must
+    emit the real schema: a ``dependencies`` list whose entries carry ``vulns``.
+    """
+    if vuln_ids:
+        deps = [
+            {
+                "name": "pkg1",
+                "version": "1.0",
+                "vulns": [{"id": i, "fix_versions": []} for i in vuln_ids],
+            }
+        ]
+    else:
+        deps = [
+            {"name": n, "version": "1.0", "vulns": []} for n in ("pkg1", "pkg2", "pkg3")
+        ]
+    return json_mod.dumps({"dependencies": deps, "fixes": []})
+
+
+CLEAN_JSON = audit_json()
+VULN_JSON = audit_json(["CVE-2024-1234"])
+
+
 class TestPipAuditCheckExamples:
     """Explicit test cases from the test matrix."""
 
@@ -303,16 +329,17 @@ class TestPipAuditCheckGateEngagement:
 
 
 class TestPipAuditCheckSubprocessResults:
-    """The hook should pass through pip-audit's exit code.
+    """The hook decides clean-vs-vulnerable from pip-audit's JSON output.
 
-    Clean audit (exit 0) means no vulnerabilities — hook should exit 0.
-    Vulnerabilities found (exit nonzero) — hook should exit nonzero.
+    Clean audit (JSON with no vulns) — hook exits 0, no report.
+    Vulnerabilities in the JSON — hook exits 0 (PostToolUse is cosmetic)
+    and persists a report for the guard.
     Uses a fake ``uvx`` script to test without network access.
     """
 
     def test_audit_clean_returns_zero(self, post_tool_payload, tmp_path):
-        """When pip-audit exits 0 (clean), hook should return 0."""
-        fake_bin = make_fake_uv_bin(tmp_path, 0, stdout="pkg1\npkg2\npkg3")
+        """When pip-audit reports no vulns, hook should return 0."""
+        fake_bin = make_fake_uv_bin(tmp_path, 0, stdout=CLEAN_JSON)
         # PATH: fake bin first (for uv/uvx), then real bins (for python).
         # HOOK_STATE_DIR pins state to tmp_path so the hook never writes into the
         # real repo .hook_state (that leak left a stale fake-vuln report before).
@@ -339,7 +366,7 @@ class TestPipAuditCheckSubprocessResults:
         fake_bin = make_fake_uv_bin(
             tmp_path,
             1,
-            stdout="pkg1  1.0  CVE-2024-1234",
+            stdout=VULN_JSON,
             stderr="VULNERABILITIES FOUND",
         )
         real_path = os.environ.get("PATH", "")
@@ -403,7 +430,7 @@ class TestPipAuditCheckStateFile:
             post_tool_payload,
             tmp_path,
             exit_code=1,
-            stdout="pkg1  1.0  CVE-2024-1234",
+            stdout=VULN_JSON,
             stderr_text="VULNERABILITIES FOUND",
         )
         report = state_dir / "pip_audit" / "report.json"
@@ -420,7 +447,7 @@ class TestPipAuditCheckStateFile:
             post_tool_payload,
             tmp_path,
             exit_code=0,
-            stdout="pkg1\npkg2\npkg3",
+            stdout=CLEAN_JSON,
         )
         report = state_dir_result / "pip_audit" / "report.json"
         assert not report.exists(), "State file should be deleted when audit is clean"
@@ -431,7 +458,7 @@ class TestPipAuditCheckStateFile:
             post_tool_payload,
             tmp_path,
             exit_code=0,
-            stdout="pkg1\npkg2",
+            stdout=CLEAN_JSON,
         )
         report = state_dir / "pip_audit" / "report.json"
         assert not report.exists()
@@ -439,12 +466,11 @@ class TestPipAuditCheckStateFile:
 
     def test_state_file_contains_summary(self, post_tool_payload, tmp_path):
         """The state file content includes vulnerability details from pip-audit."""
-        vuln_output = "pkg1  1.0  CVE-2024-1234"
         _, _, state_dir = self._run_with_state_dir(
             post_tool_payload,
             tmp_path,
             exit_code=1,
-            stdout=vuln_output,
+            stdout=VULN_JSON,
             stderr_text="Found 1 vulnerability",
         )
         report = state_dir / "pip_audit" / "report.json"
@@ -510,7 +536,7 @@ class TestPipAuditCheckRealPayloadSchema:
             payload,
             tmp_path,
             exit_code=1,
-            stdout="pkg1  1.0  CVE-2024-1234",
+            stdout=VULN_JSON,
             stderr_text="VULNERABILITIES FOUND",
         )
         report = state_dir / "pip_audit" / "report.json"
@@ -526,7 +552,7 @@ class TestPipAuditCheckRealPayloadSchema:
         report.json (companion guard then stops blocking)."""
         payload = post_tool_payload("uv sync")
         code, stderr, state_dir = self._run(
-            payload, tmp_path, exit_code=0, stdout="pkg1\npkg2\npkg3"
+            payload, tmp_path, exit_code=0, stdout=CLEAN_JSON
         )
         report = state_dir / "pip_audit" / "report.json"
         assert code == 0
@@ -600,7 +626,7 @@ class TestUvRunCoverage:
             "uv run pytest",
             exit_code=1,
             lock_content="lockA\n",
-            stdout="pkg1 1.0 CVE-2024-1",
+            stdout=VULN_JSON,
             stderr_text="VULNS",
         )
         assert "[pip-audit]" in stderr, "uv run should engage the audit on first sight"
@@ -632,6 +658,7 @@ class TestUvRunCoverage:
             exit_code=1,
             lock_content="NEW-RESOLVED-DEPS\n",
             stored_hash=stale,
+            stdout=VULN_JSON,
             stderr_text="VULNS",
         )
         assert "[pip-audit]" in stderr, "changed lock must trigger an audit"
@@ -665,6 +692,7 @@ class TestUvRunCoverage:
             exit_code=1,
             lock_content=content,
             stored_hash=matching,
+            stdout=VULN_JSON,
             stderr_text="VULNS",
         )
         assert "[pip-audit]" in stderr
@@ -682,7 +710,7 @@ class TestUvRunCoverage:
             "uv run pytest",
             exit_code=0,  # clean audit
             lock_content=content,
-            stdout="pkg1\npkg2",
+            stdout=CLEAN_JSON,
         )
         recorded = (
             tmp_path / ".hook_state" / "pip_audit" / "last_lock_hash"
@@ -706,7 +734,7 @@ class TestPipAuditAuditsProjectDeps:
         fake_bin = make_fake_uv_bin(
             tmp_path,
             0,
-            stdout="ok",
+            stdout=CLEAN_JSON,
             export_out="SENTINEL_DEP==9.9\n",
             argv_dump=str(argv_dump),
         )
@@ -743,3 +771,62 @@ class TestPipAuditAuditsProjectDeps:
         assert code == 0
         assert "nothing to audit" in stderr
         assert not (tmp_path / ".hook_state" / "pip_audit" / "report.json").exists()
+
+
+class TestPipAuditNetworkFailure:
+    """Regression guards for the network-outage lockout bug.
+
+    pip-audit needs the network every run (it queries PyPI/OSV live). In the
+    sandbox (``allowedHosts: []``) it exits nonzero WITHOUT producing JSON.
+    The hook once treated any nonzero exit as "vulns found", wrote report.json
+    from the error output, and the guard then blocked all dependency
+    operations on a phantom report. These tests would fail against that code:
+    an unparseable audit must leave every piece of state exactly as it was.
+    """
+
+    TRACEBACK = "Traceback (most recent call last): ConnectionError"
+
+    def _run_failure(self, post_tool_payload, tmp_path, command="uv add requests"):
+        """Run the hook with a fake uvx that fails without emitting JSON."""
+        fake_bin = make_fake_uv_bin(tmp_path, 1, stdout="", stderr=self.TRACEBACK)
+        state_dir = tmp_path / ".hook_state"
+        (tmp_path / "uv.lock").write_text("lockA\n")
+        code, stderr, _ = run_hook(
+            HOOK,
+            post_tool_payload(command),
+            env={
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "HOOK_STATE_DIR": str(state_dir),
+            },
+            timeout=15,
+        )
+        return code, stderr, state_dir
+
+    def test_failed_audit_writes_no_report(self, post_tool_payload, tmp_path):
+        """LOAD-BEARING: nonzero exit + non-JSON output must NOT arm the guard."""
+        code, stderr, state_dir = self._run_failure(post_tool_payload, tmp_path)
+        assert code == 0
+        assert "could not run" in stderr
+        assert "VULNERABILITIES" not in stderr
+        assert not (state_dir / "pip_audit" / "report.json").exists(), (
+            "A failed audit must not write report.json — that armed the guard "
+            "and locked out all dependency ops on a phantom report"
+        )
+
+    def test_failed_audit_does_not_record_lock_hash(self, post_tool_payload, tmp_path):
+        """No hash record on failure, so the next `uv run` retries the audit
+        instead of skipping on a lock state that was never actually audited."""
+        _, _, state_dir = self._run_failure(post_tool_payload, tmp_path)
+        assert not (state_dir / "pip_audit" / "last_lock_hash").exists()
+
+    def test_failed_audit_preserves_existing_report(self, post_tool_payload, tmp_path):
+        """A failed audit must not clear a report from a previous REAL audit —
+        known vulns keep blocking until a successful clean audit clears them."""
+        state_dir = tmp_path / ".hook_state"
+        report = state_dir / "pip_audit" / "report.json"
+        report.parent.mkdir(parents=True)
+        report.write_text('{"vulns": "pkg1 1.0: CVE-2024-1234", "summary": "real"}')
+
+        self._run_failure(post_tool_payload, tmp_path)
+        assert report.exists(), "Failure must not clear a genuine prior report"
+        assert "CVE-2024-1234" in report.read_text()

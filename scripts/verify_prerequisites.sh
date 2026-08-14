@@ -58,8 +58,6 @@ PYTHON_HOOKS=(
     check_dependency_pins.py
     block_suppressions.py
     block_glob_deny_rules.py
-    check_docstrings.py
-    check_random_seeds.py
     pip_audit_check.py
     scan_prompt_injection.py
 )
@@ -99,7 +97,6 @@ done
 LIBRARY_FILES=(
     hook_inject.py
     hook_log.py
-    inject_tool_findings.py
 )
 
 printf "\n  ${BOLD}Library files${RESET}\n"
@@ -185,14 +182,16 @@ PYEOF
             FAIL:*)  fail "Hook group: ${line#FAIL:}  (missing)" ;;
             TOTAL:*)
                 total="${line#TOTAL:}"
-                # 16 = 17 wired entries minus the block_read_env.py dup (wired on
-                # both Read and Bash; counted once as a unique command string).
-                # Down from 20 after the channel redesign folded pyright/bandit/
-                # semgrep/docstrings/seeds into the single batch_checks.sh Stop hook.
-                if [[ "$total" -eq 16 ]]; then
-                    pass "Total hooks wired: $total (expected 16)"
+                # 17 unique command strings (block_read_env.py wired on both
+                # Read and Bash counts once) — matches CANONICAL_HOOKS in
+                # tests/test_hooks/test_hook_wiring.py. Down one after the
+                # 2026-08 pre-commit migration retired the batch_checks.sh Stop
+                # hook (pyright/bandit/semgrep/docstrings now run in the git
+                # pre-commit hook; seeds leg dropped system-wide).
+                if [[ "$total" -eq 17 ]]; then
+                    pass "Total hooks wired: $total (expected 17)"
                 else
-                    fail "Total hooks wired: $total (expected 16)"
+                    fail "Total hooks wired: $total (expected 17)"
                 fi
                 ;;
         esac

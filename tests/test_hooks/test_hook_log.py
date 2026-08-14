@@ -9,9 +9,10 @@ module import. Two ways it used to break:
     raises OSError → importing a hook for testing errored at collection
     (test_project_health_check.py). Regression guard: read failures degrade to
     an empty label instead of propagating.
-  - a foreign stdin pipe (e.g. batch_checks.sh's `while read` loop) would be
-    drained; that is fixed at the caller with </dev/null, but the label read
-    here must still fail closed rather than raise.
+  - a foreign stdin pipe (e.g. a caller's `while read` loop — the retired
+    batch_checks.sh hit this) would be drained; fixed at the caller with
+    </dev/null, but the label read here must still fail closed rather than
+    raise.
 """
 
 import io

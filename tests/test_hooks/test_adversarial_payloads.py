@@ -21,7 +21,7 @@ from tests.test_hooks.hook_runner import HOOKS_DIR, run_bash_hook, run_hook
 from tests.test_hooks.test_hook_wiring import CANONICAL_HOOKS
 
 # Stop hooks that read git state, not stdin JSON
-STDIN_INDEPENDENT = {"batch_checks.sh", "ruff_lint.sh"}
+STDIN_INDEPENDENT = {"ruff_lint.sh"}
 
 ALL_HOOKS: dict[str, str] = {
     name: cfg["interpreter"]

@@ -45,9 +45,13 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _commit(
-    repo: Path, ledger: Path, msg: str, legs: str | None = None
+    repo: Path,
+    ledger: Path,
+    msg: str,
+    legs: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PRECOMMIT_LOG": str(ledger)}
+    env = {**os.environ, "PRECOMMIT_LOG": str(ledger), **(extra_env or {})}
     if legs is None:
         # conftest exports PRECOMMIT_LEGS="" for suite isolation, which would
         # disable every leg; drop it so "unset = all legs" applies here.
@@ -482,7 +486,13 @@ class TestStep7:
         ledger = tmp_path / "ledger.log"
         before = _head_count(repo)
         _stage(repo, "probe.py", "import pdb\npdb.set_trace()\n")
-        result = _commit(repo, ledger, "add pdb", legs="semgrep")
+        result = _commit(
+            repo,
+            ledger,
+            "add pdb",
+            legs="semgrep",
+            extra_env={"TMPDIR": str(tmp_path)},
+        )
         combined = result.stdout + result.stderr
         assert result.returncode == 0
         assert _head_count(repo) == before + 1
@@ -491,6 +501,8 @@ class TestStep7:
         text = ledger.read_text()
         assert "error:" in text
         assert "semgrep ruleset missing" in text
+        debug_log = tmp_path / "hook_debug.log"
+        assert "semgrep ruleset missing" in debug_log.read_text()
 
 
 class TestSemgrepLegUnit:

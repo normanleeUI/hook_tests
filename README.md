@@ -64,12 +64,12 @@ to get wrong: we first concluded "sequential" from a fast/slow hook pair, which
 turned out to be a lesson in probe design, not hook behavior (see the addendum
 in [`probes/PROBE_RESULTS_PHASE2.md`](probes/PROBE_RESULTS_PHASE2.md)).
 
-Parallelism is harmless until two hooks touch the same mutable state. The hooks
-that **inject `# HOOK:<TOOL>:` comments** — `inject_tool_findings.py` and the
-docstring/seed checks — each do a *read → modify → write* of the same source
-file. Run concurrently, they race: the last writer wins and the other hook's
-comments silently vanish. A read-modify-write across a shared file is the
-canonical shape of this bug.
+Parallelism is harmless until two hooks touch the same mutable state. Hooks
+that **inject `# HOOK:<TOOL>:` comments** (the now-retired
+`inject_tool_findings.py` and docstring/seed checks) each did a *read →
+modify → write* of the same source file. Run concurrently, they race: the last
+writer wins and the other hook's comments silently vanish. A read-modify-write
+across a shared file is the canonical shape of this bug.
 
 **This is what the `.hook_lock` file is for.** Each injector takes an exclusive
 `fcntl.flock` on a **per-target-file** lock at `<filepath>.hook_lock`, holds it
@@ -81,11 +81,11 @@ run in parallel. Two caveats worth stating honestly:
 - Only the **injection** hooks lock. Hooks that merely *block* (exit 2) or write
   their own [state file](#the-hooks) share no mutable file with a sibling, so
   they don't need one.
-- In the current layout the injectors are driven **sequentially** by the
-  `batch_checks.sh` Stop hook, so the lock is now more belt-and-suspenders than
-  actively contended — it earned its keep when pyright/bandit/semgrep were
-  *separate* parallel `PostToolUse` hooks (since consolidated). Keep it: the
-  moment any two injectors are wired into one group again, the race is back.
+- The injector fleet is retired (2026-08: pyright/bandit/semgrep/docstring
+  checks moved to the git pre-commit hook in claude-config `githooks/`, which
+  reports on stderr instead of rewriting files; the seed leg was dropped).
+  The lock helper survives in `hook_inject.py` for any future injector: the
+  moment two injectors are wired into one group again, the race is back.
 
 ### Other behavioral gotchas that cost real debugging time
 
@@ -228,15 +228,16 @@ not a library.
 | Hook | Channel | What it does |
 |---|---|---|
 | `ruff_lint.sh` | File rewrite | Runs `ruff check --fix` once across every changed `.py` file. |
-| `batch_checks.sh` | Inline comment | Batch-runs pyright, bandit, semgrep, docstring and seed checks over all changed `.py` files, injecting `# HOOK:<TOOL>:` comments inline. |
 
-### Invoked by `batch_checks.sh` (Stop), not wired individually
+### Retired 2026-08 — superseded by the git pre-commit hook
 
-| Script | Channel | What it does |
-|---|---|---|
-| `inject_tool_findings.py` | Inline comment | Runs pyright/bandit/semgrep and injects findings as `# HOOK:<TOOL>:` comments (single-file and `--batch` modes). |
-| `check_docstrings.py` | Inline comment | Flags Python functions missing docstrings. |
-| `check_random_seeds.py` | Inline comment | Warns when randomness is used without a fixed seed. |
+The `batch_checks.sh` Stop hook and its injectors (`inject_tool_findings.py`,
+`check_docstrings.py`, `check_random_seeds.py`) are unwired and their tests
+removed. Pyright, bandit, semgrep, and docstring checks now run in the
+claude-config `githooks/pre-commit` hook (covered by
+`tests/test_hooks/test_precommit_hook.py` and
+`tests/test_hooks/test_docstring_analysis.py`); the seed leg was dropped
+system-wide.
 
 ### Shared libraries — imported by the hooks, not fired directly
 

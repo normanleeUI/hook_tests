@@ -146,12 +146,6 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": None,
         "if_condition": None,
     },
-    "batch_checks.sh": {
-        "event": "Stop",
-        "interpreter": "bash",
-        "matcher": None,
-        "if_condition": None,
-    },
 }
 
 DEPRECATED_HOOKS: dict[str, str] = {
@@ -160,22 +154,22 @@ DEPRECATED_HOOKS: dict[str, str] = {
     "r_style_check.sh": "Unwired 2026-06-13: R not actively used",
     "plan_runner_write_gate.py": "Never wired: plan runner concept abandoned",
     "check_test_pair.py": "Unwired 2026-06-21: obsolete, uses dead stdout channel",
-    # Removed from the repo 2026-07-17. Superseded by the Stop hook batch_checks.sh,
-    # which runs these tools once via inject_tool_findings.py --batch instead of a
-    # per-file PostToolUse wrapper each. Kept here so re-wiring them is flagged, and
-    # so a live ~/.claude/hooks that still has them is not reported as an orphan.
-    "pyright_check.sh": "Superseded 2026-07-17: pyright runs via batch_checks.sh",
-    "bandit_check.sh": "Superseded 2026-07-17: bandit runs via batch_checks.sh",
-    "semgrep_check.sh": "Superseded 2026-07-17: semgrep runs via batch_checks.sh",
+    # Removed from the repo 2026-07-17. Originally superseded by the Stop hook
+    # batch_checks.sh; as of 2026-08-13 these tools run in the git pre-commit
+    # hook (githooks/pre-commit) instead. Kept here so re-wiring them is flagged,
+    # and so a live ~/.claude/hooks that still has them is not reported as an orphan.
+    "pyright_check.sh": "Superseded 2026-07-17: pyright now runs via git pre-commit hook",
+    "bandit_check.sh": "Superseded 2026-07-17: bandit now runs via git pre-commit hook",
+    "semgrep_check.sh": "Superseded 2026-07-17: semgrep now runs via git pre-commit hook",
+    "batch_checks.sh": "Retired 2026-08-13: superseded by git pre-commit hook (githooks/pre-commit)",
+    "inject_tool_findings.py": "Retired 2026-08-13: superseded by git pre-commit hook (githooks/pre-commit)",
+    "check_docstrings.py": "Retired 2026-08-13: superseded by git pre-commit hook (githooks/pre-commit)",
+    "check_random_seeds.py": "Retired 2026-08-13: superseded by git pre-commit hook (githooks/pre-commit)",
 }
 
 KNOWN_LIBRARIES: set[str] = {
     "hook_log.py",
     "hook_inject.py",
-    "inject_tool_findings.py",
-    # Called by batch_checks.sh, not individually wired
-    "check_docstrings.py",
-    "check_random_seeds.py",
     # On-demand scaffold tool: offered by project_health_check, run by the
     # model only on user acceptance. Never wired to an event by design.
     "scaffold_project.py",

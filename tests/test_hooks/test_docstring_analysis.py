@@ -2,15 +2,14 @@
 
 Ports TestCheckDocstrings' behavioral cases from stdin-payload subprocess
 calls to plain function calls (AC-DOC-02), plus an import-purity check
-(AC-DOC-01) and a parity spot-check against the old hook.
+(AC-DOC-01) and a flagged-lines spot-check (values captured from the retired
+check_docstrings.py for parity).
 """
 
 import os
 import subprocess
 import sys
 from pathlib import Path
-
-from tests.test_hooks.hook_runner import run_hook
 
 CLAUDE_CONFIG = Path(
     os.environ.get(
@@ -154,10 +153,11 @@ class TestShouldSkip:
         assert should_skip(Path("/x/module.py")) is False
 
 
-class TestParityWithOldHook:
-    """New analyzer flags the same line numbers the old hook injects on."""
+class TestFlaggedLines:
+    """Analyzer flags the expected line numbers (parity values captured from
+    the retired check_docstrings.py before its 2026-08-13 removal)."""
 
-    def test_flagged_lines_match(self, tmp_path: Path) -> None:
+    def test_undocumented_defs_flagged_at_expected_lines(self) -> None:
         src = (
             "class MyClass:\n"
             "    def method(self, a, b):\n"
@@ -170,25 +170,6 @@ class TestParityWithOldHook:
             "    b = a * 2\n"
             "    return b\n"
         )
-        f = tmp_path / "module.py"
-        f.write_text(src)
-        payload = {
-            "tool_input": {"file_path": str(f)},
-            "tool_response": {"filePath": str(f)},
-        }
-        rc, _stderr, _stdout = run_hook("check_docstrings.py", payload)
-        assert rc == 0
-        # inject_at_line inserts each comment ABOVE the flagged line, so map
-        # comment positions back to clean-file line numbers by counting only
-        # non-comment lines.
-        old_flagged = []
-        clean_lineno = 0
-        for line in f.read_text().splitlines():
-            if line.strip().startswith("# HOOK:DOCSTRING:"):
-                old_flagged.append(clean_lineno + 1)
-            else:
-                clean_lineno += 1
         # ast.walk is breadth-first, so sort before comparing line numbers.
-        new_flagged = sorted(lineno for lineno, _msg in analyze_docstrings(src))
-        assert new_flagged == [1, 2, 7]
-        assert old_flagged == new_flagged
+        flagged = sorted(lineno for lineno, _msg in analyze_docstrings(src))
+        assert flagged == [1, 2, 7]

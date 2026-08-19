@@ -101,6 +101,7 @@ def hook_repo(tmp_path: Path) -> tuple[Path, Path]:
 
 
 WARN_HEADER = "⚠  pre-commit (warn-only): findings on lines you added:"
+BLOCK_HEADER = "✖  pre-commit BLOCKED this commit"
 
 # Undocumented non-trivial public function: >=3 body statements so
 # _is_trivial (<=2 statements) does not skip it. Finding lands on line 1.
@@ -108,24 +109,41 @@ UNDOC_CODE = "def public_fn(x):\n    a = x * 2\n    b = a + x\n    return b\n"
 
 
 class TestPrecommitCharacterization:
-    def test_b602_warns_but_commit_lands(self, hook_repo) -> None:
-        """AC-INV-01 + AC-LEG-01: finding warns on stderr/stdout, exit 0."""
+    def test_b602_blocks_commit(self, hook_repo) -> None:
+        """Blocking policy 2026-08-19: bandit finding -> stderr block, rc != 0,
+        commit does NOT land, bypass hint present."""
         repo, ledger = hook_repo
         before = _head_count(repo)
         _stage(repo, "bad.py", B602_CODE)
         result = _commit(repo, ledger, "add bad")
+        assert result.returncode != 0
+        assert _head_count(repo) == before
+        assert BLOCK_HEADER in result.stderr
+        assert "bad.py:3" in result.stderr
+        assert "B602" in result.stderr
+        assert "PRECOMMIT_NO_BLOCK=1" in result.stderr
+
+    def test_no_block_env_demotes_to_warning(self, hook_repo) -> None:
+        """PRECOMMIT_NO_BLOCK=1: same finding warns, commit lands, ledger
+        line is tagged BYPASSED."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "bad.py", B602_CODE)
+        result = _commit(repo, ledger, "add bad", extra_env={"PRECOMMIT_NO_BLOCK": "1"})
         combined = result.stdout + result.stderr
         assert result.returncode == 0
         assert _head_count(repo) == before + 1
         assert WARN_HEADER in combined
-        assert "bad.py:3" in combined
+        assert BLOCK_HEADER not in combined
         assert "B602" in combined
+        assert "BYPASSED" in ledger.read_text()
 
     def test_preexisting_finding_not_reported(self, hook_repo) -> None:
         """AC-LEG-05: a finding already in history, untouched, stays silent."""
         repo, ledger = hook_repo
         _stage(repo, "old.py", B602_CODE)
-        _commit(repo, ledger, "seed finding")  # seeds the B602 into history
+        # bypass the block so the B602 actually lands in history
+        _commit(repo, ledger, "seed finding", extra_env={"PRECOMMIT_NO_BLOCK": "1"})
         _stage(repo, "other.py", "x = 1\n")
         result = _commit(repo, ledger, "clean change")
         combined = result.stdout + result.stderr
@@ -149,6 +167,8 @@ class TestPrecommitCharacterization:
         _stage(repo, "bad.py", B602_CODE)
         _commit(repo, ledger, "add bad")
         text = ledger.read_text()
+        # B602 code also trips a semgrep subprocess rule, so no exact count.
+        assert "BLOCKED" in text
         assert "finding(s):" in text
         assert "bad.py:3 [B602 HIGH]" in text
 
@@ -172,15 +192,26 @@ class TestPrecommitCharacterization:
 
 class TestStep2:
     def test_warn_trailer_instructs_fix(self, hook_repo) -> None:
-        """AC-TRL-01: trailer actively instructs a fix, not 'informational'."""
+        """AC-TRL-01: warn trailer actively instructs a fix, not 'informational'.
+        Uses a docstring finding — bandit findings now block instead of warn."""
         repo, ledger = hook_repo
-        _stage(repo, "bad.py", B602_CODE)
-        result = _commit(repo, ledger, "add bad")
+        _stage(repo, "mod.py", UNDOC_CODE)
+        result = _commit(repo, ledger, "add mod", legs="docstring")
         combined = result.stdout + result.stderr
         assert result.returncode == 0
         assert "--amend" in combined
         assert "follow-up commit" in combined
         assert "informational" not in combined
+
+    def test_block_trailer_instructs_fix(self, hook_repo) -> None:
+        """Block message must be actionable (fix + restage) and name the bypass."""
+        repo, ledger = hook_repo
+        _stage(repo, "bad.py", B602_CODE)
+        result = _commit(repo, ledger, "add bad")
+        assert result.returncode != 0
+        assert "git add" in result.stderr
+        assert "commit again" in result.stderr
+        assert "PRECOMMIT_NO_BLOCK=1" in result.stderr
 
     def test_internal_error_writes_ledger_line(self, tmp_path) -> None:
         """AC-LOG-04: outside a git repo the except path logs error:, exit 0."""
@@ -232,7 +263,7 @@ class TestStep3:
         _stage(repo, "claudette/x.py", B602_CODE)
         result = _commit(repo, ledger, "add claudette file")
         combined = result.stdout + result.stderr
-        assert result.returncode == 0
+        assert result.returncode != 0  # scanned -> bandit finding -> blocked
         assert "claudette/x.py:3" in combined
         assert "B602" in combined
 
@@ -285,10 +316,9 @@ class TestStep3:
         repo, ledger = hook_repo
         _stage(repo, "bad.py", B602_CODE)
         result = _commit(repo, ledger, "add bad", legs="bandit")
-        combined = result.stdout + result.stderr
-        assert result.returncode == 0
-        assert WARN_HEADER in combined
-        assert "bad.py:3" in combined
+        assert result.returncode != 0
+        assert BLOCK_HEADER in result.stderr
+        assert "bad.py:3" in result.stderr
 
 
 class TestStep5:
@@ -534,6 +564,30 @@ class TestSemgrepLegUnit:
         assert calls == []
         assert "ruleset" in capsys.readouterr().err
 
+    def test_error_severity_blocks_warning_does_not(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Blocking policy 2026-08-19: ERROR-severity findings carry block=True,
+        WARNING-severity block=False."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        monkeypatch.chdir(tmp_path)
+        rules = tmp_path / "semgrep_rules" / "rules"
+        rules.mkdir(parents=True)
+        (rules / "python.yaml").write_text("rules: []\n")
+        monkeypatch.setattr(mod, "_SEMGREP_RULES", rules)
+        payload = (
+            '{"results": ['
+            '{"path": "f.py", "start": {"line": 1}, "check_id": "x.err",'
+            ' "extra": {"message": "bad", "severity": "ERROR"}},'
+            '{"path": "f.py", "start": {"line": 2}, "check_id": "x.warn",'
+            ' "extra": {"message": "meh", "severity": "WARNING"}}]}'
+        )
+        _canned_pyright(monkeypatch, mod, payload)
+        assert mod.semgrep_leg({"f.py": {1, 2}}) == [
+            ("f.py", 1, "[semgrep err] bad", True),
+            ("f.py", 2, "[semgrep warn] meh", False),
+        ]
+
 
 # ── pyright_leg unit tests (monkeypatched subprocess.run, canned JSON) ─────
 
@@ -585,7 +639,9 @@ class TestPyrightLegUnit:
             % (tmp_path, tmp_path)
         )
         _canned_pyright(monkeypatch, mod, payload)
-        assert mod.pyright_leg({"f.py": {1}}) == [("f.py", 1, "[pyright error] boom")]
+        assert mod.pyright_leg({"f.py": {1}}) == [
+            ("f.py", 1, "[pyright error] boom", False)
+        ]
 
     def test_pythonpath_only_when_venv_exists(self, monkeypatch, tmp_path) -> None:
         mod = _load_hook_module(monkeypatch, tmp_path)

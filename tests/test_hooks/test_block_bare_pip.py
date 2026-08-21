@@ -77,6 +77,8 @@ class TestBlockBarePipShellStructures:
             "pip install \\\n  requests",
             "pip install requests  # needed for API",
             "sudo pip install requests",
+            "env pip install requests",
+            "command pip install requests",
         ],
         ids=[
             "compound-and",
@@ -100,6 +102,8 @@ class TestBlockBarePipShellStructures:
             "line-continuation",
             "trailing-comment",
             "sudo-prefix",
+            "env-prefix",
+            "command-prefix",
         ],
     )
     def test_pip_in_complex_command_blocked(self, bash_payload, cmd):

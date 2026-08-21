@@ -32,12 +32,12 @@ class TestBlockBarePipExamples:
         assert code == 0
 
     def test_python_m_pip_blocked(self, bash_payload):
-        """python -m pip: space before pip is not in [./\\w], so regex matches."""
+        """python -m pip is the same global install, matched explicitly."""
         code, _, _ = run_hook(HOOK, bash_payload("python -m pip install requests"))
         assert code == 2
 
     def test_python3_m_pip_blocked(self, bash_payload):
-        """python3 -m pip: space before pip is not in [./\\w], so regex matches."""
+        """python3 -m pip is the same global install, matched explicitly."""
         code, _, _ = run_hook(HOOK, bash_payload("python3 -m pip install requests"))
         assert code == 2
 
@@ -138,6 +138,62 @@ class TestBlockBarePipShellStructures:
     def test_non_bare_pip_allowed(self, bash_payload, cmd):
         code, _, _ = run_hook(HOOK, bash_payload(cmd))
         assert code == 0, f"Expected exit 0 (allowed) for: {cmd!r}"
+
+
+class TestBlockBarePipCommandPosition:
+    """Command-position anchoring: pip must be a command, not a mention.
+
+    The old regex matched `pip install` anywhere in the string, so any command
+    that merely *talked about* pip (echo, grep, a comment, a commit message)
+    was blocked. Same bug, same fix, as pip_audit_check/guard.
+    """
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            'echo "pip install requests"',
+            "echo 'run pip install requests first'",
+            "grep -n 'pip install' setup.log",
+            "# pip install requests",
+            'git commit -m "document why pip install is blocked"',
+            "printf '%s\\n' 'pip install foo' > notes.txt",
+        ],
+        ids=["echo-double", "echo-single", "grep", "comment", "commit-msg", "printf"],
+    )
+    def test_pip_mention_allowed(self, bash_payload, cmd):
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
+        assert code == 0, f"Expected exit 0 (mention, not a command) for: {cmd!r}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "pip install requests",
+            "cd /tmp && pip install requests",
+            "cd /tmp; pip install requests",
+            "make build; pip3 install requests",
+            "false || pip install requests",
+        ],
+        ids=["bare", "and", "semicolon", "semicolon-pip3", "or"],
+    )
+    def test_pip_at_command_position_blocked(self, bash_payload, cmd):
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
+        assert code == 2, f"Expected exit 2 (blocked) for: {cmd!r}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "uv pip install requests",
+            "uv pip install -r requirements.txt",
+            "cd /p && uv pip install requests",
+            "uv add requests",
+        ],
+        ids=["uv-pip", "uv-pip-r", "compound", "uv-add"],
+    )
+    def test_uv_pip_allowed(self, bash_payload, cmd):
+        """Hook policy (see its block message): `uv pip install` is the
+        sanctioned pip-semantics escape hatch, so it must stay unblocked."""
+        code, _, _ = run_hook(HOOK, bash_payload(cmd))
+        assert code == 0, f"Expected exit 0 (uv-managed) for: {cmd!r}"
 
 
 class TestBlockBarePipProperties:

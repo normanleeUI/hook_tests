@@ -129,7 +129,16 @@ def make_fake_uv_bin(
         'if [ "$1" = "export" ]; then printf %s ' + repr(export_out) + "; exit 0; fi\n"
         "exit 0\n"
     )
-    dump = f'printf "%s" "$*" > {argv_dump}\n' if argv_dump else ""
+    # Also snapshot the requirements file uvx was pointed at: the hook now
+    # creates it with tempfile.mkstemp and unlinks it when the audit returns,
+    # so a test can only read it from inside the fake uvx.
+    dump = (
+        f'printf "%s" "$*" > {argv_dump}\n'
+        f'for a in "$@"; do last="$a"; done\n'
+        f'cat "$last" > {argv_dump}.reqs 2>/dev/null\n'
+        if argv_dump
+        else ""
+    )
     (fake_bin / "uvx").write_text(
         f"#!/bin/sh\n{dump}echo '{stdout}'\necho '{stderr}' >&2\nexit {exit_code}\n"
     )
@@ -803,9 +812,6 @@ class TestPipAuditAuditsProjectDeps:
             env={
                 "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
                 "HOOK_STATE_DIR": str(tmp_path / ".hook_state"),
-                # The hook writes its exported reqs to a FIXED name under
-                # $TMPDIR; under xdist (-n6) parallel tests stomp that shared
-                # file between this test's hook run and its read. Isolate it.
                 "TMPDIR": str(tmp_path),
             },
             timeout=15,
@@ -813,10 +819,38 @@ class TestPipAuditAuditsProjectDeps:
         assert code == 0
         argv = argv_dump.read_text().split()
         assert "-r" in argv, f"pip-audit must audit a requirements file, got: {argv!r}"
-        reqs_path = argv[argv.index("-r") + 1]
-        assert "SENTINEL_DEP" in Path(reqs_path).read_text(), (
+        # The reqs file is a per-run mkstemp path, unlinked once the audit
+        # returns, so we assert on the snapshot the fake uvx took while it lived.
+        assert "SENTINEL_DEP" in Path(f"{argv_dump}.reqs").read_text(), (
             "pip-audit must be pointed at the EXPORTED project deps, not the bare env"
         )
+
+    def test_exported_reqs_file_is_unique_and_cleaned_up(
+        self, post_tool_payload, tmp_path
+    ):
+        """Regression guard: a fixed $TMPDIR/pip_audit_reqs.txt raced between
+        concurrent audits. The path must be unique per run and removed after."""
+        argv_dump = tmp_path / "uvx_argv.txt"
+        fake_bin = make_fake_uv_bin(
+            tmp_path, 0, stdout=CLEAN_JSON, argv_dump=str(argv_dump)
+        )
+        code, _, _ = run_hook(
+            HOOK,
+            post_tool_payload("uv sync"),
+            env={
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "HOOK_STATE_DIR": str(tmp_path / ".hook_state"),
+                "TMPDIR": str(tmp_path),
+            },
+            timeout=15,
+        )
+        assert code == 0
+        argv = argv_dump.read_text().split()
+        reqs_path = Path(argv[argv.index("-r") + 1])
+        assert reqs_path.name != "pip_audit_reqs.txt", (
+            "fixed temp name races concurrent audits; use a unique path"
+        )
+        assert not reqs_path.exists(), "temp requirements file must be cleaned up"
 
     def test_empty_export_reports_nothing_to_audit(self, post_tool_payload, tmp_path):
         """No exportable deps -> hook reports 'nothing to audit' and writes no

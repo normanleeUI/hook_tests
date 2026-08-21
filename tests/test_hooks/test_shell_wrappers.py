@@ -375,6 +375,59 @@ class TestGitPullOnStart:
             "Hook should warn about dirty working tree"
         )
 
+    def test_hanging_ls_remote_times_out_silently(self, tmp_path):
+        """A hanging `git ls-remote` must not stall the session start.
+
+        The probe is wrapped in `timeout 2`; a hang is treated exactly like
+        being offline — exit 0, no output. Fake `git` shadows the real one on
+        PATH and sleeps forever on ls-remote, delegating everything else.
+        """
+        real_git = shutil.which("git")
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "git"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "ls-remote" ]; then sleep 60; fi\n'
+            f'exec {real_git} "$@"\n'
+        )
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        _init_git_repo(work_dir)
+        bare_dir = tmp_path / "bare.git"
+        subprocess.run(
+            ["git", "init", "--bare", str(bare_dir)], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(work_dir), "remote", "add", "origin", str(bare_dir)],
+            check=True,
+            capture_output=True,
+        )
+        branch = subprocess.run(
+            ["git", "-C", str(work_dir), "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "-C", str(work_dir), "push", "-u", "origin", branch],
+            check=True,
+            capture_output=True,
+        )
+
+        env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": os.environ["HOME"]}
+        start = time.monotonic()
+        rc, _, stdout = run_bash_hook(
+            "git_pull_on_start.sh", {}, env=env, cwd=str(work_dir), timeout=30
+        )
+        elapsed = time.monotonic() - start
+
+        assert rc == 0
+        assert stdout == "", "a hanging probe should be silent, like offline"
+        assert elapsed < 10, f"probe was not bounded (took {elapsed:.1f}s)"
+
 
 # ── check_dep_freshness.sh ──────────────────────────────────────────────────
 

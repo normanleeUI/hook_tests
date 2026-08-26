@@ -116,7 +116,7 @@ def test_drift_with_stale_stamp_suggests_install(fake_home):
 
 
 def test_drift_with_stale_stamp_mentions_manual_copy_possibility(fake_home):
-    """2026-08-26: the repo-moved message must also name the alternative —
+    """2026-08-25: the repo-moved message must also name the alternative —
     a manual-copy deploy that left the stamp stale — and point at the
     per-file sync.sh --check output, instead of asserting install.sh is
     the only fix."""
@@ -128,7 +128,7 @@ def test_drift_with_stale_stamp_mentions_manual_copy_possibility(fake_home):
 
 
 def test_in_sync_stale_stamp_self_heals_to_head_and_logs(fake_home):
-    """2026-08-26 self-heal: when sync.sh --check says IN SYNC but the stamp
+    """2026-08-25 self-heal: when sync.sh --check says IN SYNC but the stamp
     sha != repo HEAD, the live content provably equals the repo — a manual
     copy moved content without moving the stamp. The hook rewrites the stamp
     to '<timestamp> <HEAD short sha>' (install.sh's format) and logs a HEAL

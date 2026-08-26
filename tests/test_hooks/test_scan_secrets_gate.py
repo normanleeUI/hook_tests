@@ -155,7 +155,7 @@ class TestScanSecretsGate:
     def test_non_repo_directory_exits_0(self) -> None:
         """A genuine non-repo directory is a deliberate allow (exit 0).
 
-        2026-08-26 disposition: a `git commit` run in a non-repo cannot commit
+        2026-08-25 disposition: a `git commit` run in a non-repo cannot commit
         anything, so there is nothing to protect — the hook's exit 0 here is
         intended behavior, not fail-open (contrast test_git_error_fails_closed,
         where a .git dir exists but git errors).
@@ -167,7 +167,7 @@ class TestScanSecretsGate:
     def test_git_error_fails_closed(self, git_repo: Path) -> None:
         """A repo whose .git is present but unusable (corrupted .git/HEAD)
         must fail closed (exit 2): staged changes cannot be verified as
-        secret-free. Fixed 2026-08-26 (was a KnownBugs xfail-style entry)."""
+        secret-free. Fixed 2026-08-25 (was a KnownBugs xfail-style entry)."""
         head_file = git_repo / ".git" / "HEAD"
         head_file.write_text("garbage")
         code, stderr, _ = run_hook(HOOK, PAYLOAD, cwd=str(git_repo))
@@ -266,7 +266,7 @@ class TestScanSecretsSubdirRepo:
     (often a non-repo parent like ~/projects), so the hook must resolve the
     commit's target dir from the payload `cwd` plus any `git -C <dir>` flags.
 
-    Ported 2026-08-26 from the deleted standalone self-check
+    Ported 2026-08-25 from the deleted standalone self-check
     hooks/test_scan_secrets_on_commit.py (its only cases not already covered
     here).
     """

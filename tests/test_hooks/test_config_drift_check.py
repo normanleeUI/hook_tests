@@ -63,7 +63,7 @@ def run_hook(home: Path, repo: Path) -> str:
         ["bash", str(repo / "hooks/config_drift_check.sh")],
         capture_output=True,
         text=True,
-        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin", "TMPDIR": str(home)},
         timeout=10,
     )
     assert result.returncode == 0  # informational hook, never blocks
@@ -113,3 +113,19 @@ def test_drift_with_stale_stamp_suggests_install(fake_home):
     assert "install.sh" in out
     assert "restart" in out
     assert "claude-sync" not in out
+
+
+def test_debug_log_decision_line_and_dated_timestamp(fake_home):
+    """Both branches log a decision line, timestamped with a date (run_hook
+    sets TMPDIR=$HOME so the debug log lands in the fake home)."""
+    import re
+
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    run_hook(home, repo)
+    log = (home / "hook_debug.log").read_text()
+    assert "ALLOW  in sync" in log
+    for line in log.splitlines():
+        assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}  ", line), (
+            f"undated timestamp: {line!r}"
+        )

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -28,7 +29,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from tests.test_hooks.hook_runner import HOOKS_DIR, run_bash_hook
+from tests.test_hooks.hook_runner import run_bash_hook
 
 
 def edit_payload(file_path: str) -> dict:
@@ -596,3 +597,130 @@ class TestRuffFormatProperties:
             # Clear log for next example
             if log_file.exists():
                 log_file.write_text("")
+
+
+# ── debug-log decision lines ───────────────────────────────────────────────
+
+DATED_TS = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}  ")
+
+
+def _debug_log(tmp_path) -> str:
+    """Read the hook debug log written under TMPDIR=tmp_path."""
+    log = tmp_path / "hook_debug.log"
+    return log.read_text() if log.exists() else ""
+
+
+class TestDebugLogDecisions:
+    """Every exit path of the three SessionStart/Stop bash hooks now logs a
+    decision line (ledger 2026-08-18: 11 fires, 0 decisions), and timestamps
+    carry a date so multi-day logs stay readable."""
+
+    def test_ruff_lint_not_a_repo(self, fake_tool_env, tmp_path):
+        env, _ = fake_tool_env
+        run_bash_hook(
+            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
+        )
+        log = _debug_log(tmp_path)
+        assert "ruff_lint" in log and "ALLOW  not-a-repo" in log
+
+    def test_ruff_lint_no_py_files(self, fake_tool_env, tmp_path):
+        env, _ = fake_tool_env
+        _init_git_repo(tmp_path)
+        run_bash_hook(
+            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
+        )
+        assert "ALLOW  no-py-files" in _debug_log(tmp_path)
+
+    def test_ruff_lint_lint_fixed(self, fake_tool_env, tmp_path):
+        env, log_file = fake_tool_env
+        _init_git_repo(tmp_path)
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        stub = venv_bin / "ruff"
+        stub.write_text(f'#!/usr/bin/env bash\necho "ruff $@" >> {log_file}\nexit 0\n')
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        py_file = tmp_path / "app.py"
+        py_file.write_text("x = 1\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "app.py"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "add app"],
+            check=True,
+            capture_output=True,
+        )
+        py_file.write_text("x = 2\n")
+        run_bash_hook(
+            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
+        )
+        assert "ALLOW  lint-fixed n=1" in _debug_log(tmp_path)
+
+    def test_git_pull_not_a_repo(self, fake_tool_env, tmp_path):
+        env, _ = fake_tool_env
+        run_bash_hook(
+            "git_pull_on_start.sh",
+            {},
+            env={**env, "TMPDIR": str(tmp_path)},
+            cwd=str(tmp_path),
+        )
+        log = _debug_log(tmp_path)
+        assert "git_pull_on_start" in log and "ALLOW  not-a-repo" in log
+
+    def test_git_pull_no_remote(self, fake_tool_env, tmp_path):
+        env, _ = fake_tool_env
+        _init_git_repo(tmp_path)
+        run_bash_hook(
+            "git_pull_on_start.sh",
+            {},
+            env={**env, "TMPDIR": str(tmp_path)},
+            cwd=str(tmp_path),
+        )
+        assert "ALLOW  no-remote" in _debug_log(tmp_path)
+
+    def test_check_dep_no_uv_lock(self, fake_tool_env, tmp_path):
+        env, _ = fake_tool_env
+        _init_git_repo(tmp_path)
+        run_bash_hook(
+            "check_dep_freshness.sh",
+            {},
+            env={**env, "TMPDIR": str(tmp_path)},
+            cwd=str(tmp_path),
+        )
+        assert "ALLOW  no-uv-lock" in _debug_log(tmp_path)
+
+    def _run_dep_check(self, env, tmp_path, marker_age_days):
+        _init_git_repo(tmp_path)
+        (tmp_path / "uv.lock").write_text("")
+        marker = tmp_path / ".last_dep_check"
+        marker.write_text("")
+        t = time.time() - (marker_age_days * 86400)
+        os.utime(str(marker), (t, t))
+        return run_bash_hook(
+            "check_dep_freshness.sh",
+            {},
+            env={**env, "TMPDIR": str(tmp_path), "DEP_CHECK_MAX_DAYS": "30"},
+            cwd=str(tmp_path),
+        )
+
+    def test_check_dep_stale(self, fake_tool_env, tmp_path):
+        env, _ = fake_tool_env
+        self._run_dep_check(env, tmp_path, marker_age_days=60)
+        assert "ALLOW  stale age=60d" in _debug_log(tmp_path)
+
+    def test_check_dep_fresh(self, fake_tool_env, tmp_path):
+        env, _ = fake_tool_env
+        self._run_dep_check(env, tmp_path, marker_age_days=0)
+        assert "ALLOW  fresh age=0d" in _debug_log(tmp_path)
+
+    def test_timestamps_start_with_date(self, fake_tool_env, tmp_path):
+        """Every debug-log line now carries a YYYY-MM-DD date prefix."""
+        env, _ = fake_tool_env
+        run_bash_hook(
+            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
+        )
+        lines = _debug_log(tmp_path).splitlines()
+        assert lines, "hook should have written FIRED + decision lines"
+        for line in lines:
+            assert DATED_TS.match(line), f"undated timestamp: {line!r}"

@@ -368,13 +368,17 @@ class TestGitPullOnStart:
         )
 
         rc, stderr, stdout = run_bash_hook(
-            "git_pull_on_start.sh", {}, env=env, cwd=str(work_dir)
+            "git_pull_on_start.sh",
+            {},
+            env={**env, "TMPDIR": str(tmp_path)},
+            cwd=str(work_dir),
         )
 
         assert rc == 0
         assert "skipped auto-pull" in stdout, (
             "Hook should warn about dirty working tree"
         )
+        assert "ALLOW  dirty-tree" in _debug_log(tmp_path)
 
     def test_hanging_ls_remote_times_out_silently(self, tmp_path):
         """A hanging `git ls-remote` must not stall the session start.
@@ -418,7 +422,11 @@ class TestGitPullOnStart:
             capture_output=True,
         )
 
-        env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": os.environ["HOME"]}
+        env = {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "HOME": os.environ["HOME"],
+            "TMPDIR": str(tmp_path),
+        }
         start = time.monotonic()
         rc, _, stdout = run_bash_hook(
             "git_pull_on_start.sh", {}, env=env, cwd=str(work_dir), timeout=30
@@ -428,6 +436,9 @@ class TestGitPullOnStart:
         assert rc == 0
         assert stdout == "", "a hanging probe should be silent, like offline"
         assert elapsed < 10, f"probe was not bounded (took {elapsed:.1f}s)"
+        # Timeout is a degraded-but-nonfatal path: logged as WARN, not ERROR
+        # (ERROR is reserved for crashes per hook_log.py's contract).
+        assert "WARN  ls-remote-timeout" in _debug_log(tmp_path)
 
 
 # ── check_dep_freshness.sh ──────────────────────────────────────────────────
@@ -678,6 +689,20 @@ class TestDebugLogDecisions:
             cwd=str(tmp_path),
         )
         assert "ALLOW  no-remote" in _debug_log(tmp_path)
+
+    def test_check_dep_not_a_repo(self, fake_tool_env, tmp_path):
+        """Outside a git repo the hook logs and exits 0 — the path the empty
+        `cd ""` substitution used to skip (cd "" succeeds in bash)."""
+        env, _ = fake_tool_env
+        rc, _, stdout = run_bash_hook(
+            "check_dep_freshness.sh",
+            {},
+            env={**env, "TMPDIR": str(tmp_path)},
+            cwd=str(tmp_path),
+        )
+        assert rc == 0
+        assert stdout.strip() == ""
+        assert "ALLOW  not-a-repo" in _debug_log(tmp_path)
 
     def test_check_dep_no_uv_lock(self, fake_tool_env, tmp_path):
         env, _ = fake_tool_env

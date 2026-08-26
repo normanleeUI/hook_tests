@@ -74,6 +74,28 @@ def test_unwritable_destination_fails_loudly_but_syncs_rest(setup):
     assert (repo / "settings.json").read_text() == "{}\n"
 
 
+def test_unwritable_dir_mkdir_fails_loudly_not_abort(setup):
+    """sync_dir's mkdir leg must record a failure, not abort under set -e.
+
+    A directory source (fake/hooks) whose repo destination can't be created
+    used to kill the whole run at [2/5] with no summary.
+    """
+    repo, fake = setup
+    hooks = fake / "hooks"
+    hooks.mkdir()
+    (hooks / "example.sh").write_text("#!/bin/sh\n")
+    (repo / "CLAUDE.global.md").write_text("old\n")
+    (repo / "settings.json").write_text("old\n")
+    repo.chmod(0o555)
+
+    result = run_sync(repo, fake)
+    assert result.returncode == 1
+    # Both the .mcp.json cp and the hooks/ mkdir fail; the run still finishes.
+    assert "SYNC INCOMPLETE: 2 file(s)/dir(s)" in result.stdout
+    assert str(repo / "hooks") in result.stdout
+    assert "[5/5]" in result.stdout
+
+
 def test_check_mode_unaffected(setup):
     repo, fake = setup
     # Drifted: repo lacks the files → --check reports drift, exit 1.

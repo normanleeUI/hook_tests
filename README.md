@@ -48,6 +48,7 @@ Every "works / doesn't" below is observed behavior, not documentation.
 | `stderr` on **exit 2** + `Read` matcher | ⚠️ Weak | You see only a bare red dot (no message); the model gets the stderr and may route around it with `cat`. |
 | `stdout` on Pre/PostToolUse | ❌ Never | 12 tests, 0 reached the model. |
 | `stdout` on **SessionStart** | ✅ Yes | Reliably reaches the model (3/3). This is how to inject startup context. |
+| JSON `systemMessage` on **SessionStart** | ✅ **Renders to the human** | Empirically verified 2026-08-19 via `probe_system_message.sh` — the user read the probe marker verbatim at session start. |
 | `hookSpecificOutput.additionalContext` | ✅ Yes | Delivered to the model as a `<system-reminder>`. **Requires an undocumented `hookEventName` field** or Claude Code rejects the output. |
 | Side effects (the hook edits a file) | ✅ Yes | Hooks act on the real file on disk. The most robust channel. |
 

@@ -115,6 +115,47 @@ def test_drift_with_stale_stamp_suggests_install(fake_home):
     assert "claude-sync" not in out
 
 
+def test_drift_with_stale_stamp_mentions_manual_copy_possibility(fake_home):
+    """2026-08-26: the repo-moved message must also name the alternative —
+    a manual-copy deploy that left the stamp stale — and point at the
+    per-file sync.sh --check output, instead of asserting install.sh is
+    the only fix."""
+    home, repo = fake_home
+    (home / ".claude/.last_install").write_text("2026-01-01T00:00:00-07:00 deadbee\n")
+    out = run_hook(home, repo)
+    assert "manual" in out
+    assert "--check" in out
+
+
+def test_in_sync_stale_stamp_self_heals_to_head_and_logs(fake_home):
+    """2026-08-26 self-heal: when sync.sh --check says IN SYNC but the stamp
+    sha != repo HEAD, the live content provably equals the repo — a manual
+    copy moved content without moving the stamp. The hook rewrites the stamp
+    to '<timestamp> <HEAD short sha>' (install.sh's format) and logs a HEAL
+    decision line, so the next drift nudge names the right direction."""
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    (home / ".claude/.last_install").write_text("2026-01-01T00:00:00-07:00 deadbee\n")
+    run_hook(home, repo)
+    stamp = (home / ".claude/.last_install").read_text().strip()
+    when, sha = stamp.split()
+    assert sha == head_sha(repo)
+    # install.sh writes `date -Iseconds` — assert the same shape.
+    datetime.datetime.fromisoformat(when)
+    log = (home / "hook_debug.log").read_text()
+    assert f"HEAL   stamp deadbee -> {sha}" in log
+
+
+def test_in_sync_current_stamp_untouched(fake_home):
+    """In sync with a current stamp: no rewrite (byte-identical stamp)."""
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    original = f"2026-08-13T10:00:00-07:00 {head_sha(repo)}\n"
+    (home / ".claude/.last_install").write_text(original)
+    run_hook(home, repo)
+    assert (home / ".claude/.last_install").read_text() == original
+
+
 def test_debug_log_decision_line_and_dated_timestamp(fake_home):
     """Both branches log a decision line, timestamped with a date (run_hook
     sets TMPDIR=$HOME so the debug log lands in the fake home)."""

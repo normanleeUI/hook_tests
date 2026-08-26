@@ -152,11 +152,27 @@ class TestScanSecretsGate:
         assert code == 0
         assert "PASSED" in stderr
 
-    def test_non_repo_directory_exits_2(self) -> None:
-        """git diff fails in a non-repo directory; hook fails closed (exit 2)."""
+    def test_non_repo_directory_exits_0(self) -> None:
+        """A genuine non-repo directory is a deliberate allow (exit 0).
+
+        2026-08-26 disposition: a `git commit` run in a non-repo cannot commit
+        anything, so there is nothing to protect — the hook's exit 0 here is
+        intended behavior, not fail-open (contrast test_git_error_fails_closed,
+        where a .git dir exists but git errors).
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             code, _, _ = run_hook(HOOK, PAYLOAD, cwd=tmpdir)
-            assert code == 2
+            assert code == 0
+
+    def test_git_error_fails_closed(self, git_repo: Path) -> None:
+        """A repo whose .git is present but unusable (corrupted .git/HEAD)
+        must fail closed (exit 2): staged changes cannot be verified as
+        secret-free. Fixed 2026-08-26 (was a KnownBugs xfail-style entry)."""
+        head_file = git_repo / ".git" / "HEAD"
+        head_file.write_text("garbage")
+        code, stderr, _ = run_hook(HOOK, PAYLOAD, cwd=str(git_repo))
+        assert code == 2
+        assert "BLOCKED" in stderr
 
     def test_openai_pattern_matches_sk_ant_without_hyphen(self, git_repo: Path) -> None:
         """sk-antAAAAA... (no hyphen after ant) should match OpenAI pattern, not Anthropic."""
@@ -245,21 +261,73 @@ class TestScanSecretsGateStep0d:
         assert "PASSED" in stderr
 
 
-class TestScanSecretsGateKnownBugs:
-    """Known hook bugs documented as xfail tests.
+class TestScanSecretsSubdirRepo:
+    """Subdirectory-repo resolution: the hook process inherits the SESSION cwd
+    (often a non-repo parent like ~/projects), so the hook must resolve the
+    commit's target dir from the payload `cwd` plus any `git -C <dir>` flags.
 
-    Each test here exercises a real bug in scan_secrets_on_commit.py.
-    strict=True ensures we notice when the bug gets fixed.
+    Ported 2026-08-26 from the deleted standalone self-check
+    hooks/test_scan_secrets_on_commit.py (its only cases not already covered
+    here).
     """
 
-    def test_git_error_should_fail_closed(self, git_repo: Path) -> None:
-        """Hook should fail-closed (exit 2) when git diff returns an error,
-        not silently pass. Currently the hook ignores result.returncode."""
-        # Corrupt the repo so git diff --cached fails
-        head_file = git_repo / ".git" / "HEAD"
-        head_file.write_text("garbage")
-        code, _, _ = run_hook(HOOK, PAYLOAD, cwd=str(git_repo))
+    @pytest.fixture
+    def parent_and_repo(self, tmp_path: Path) -> tuple[Path, Path]:
+        """A non-repo parent dir containing a nested git repo."""
+        parent = tmp_path / "projects"
+        repo = parent / "sub" / "myrepo"
+        repo.mkdir(parents=True)
+        _init_git_repo(repo)
+        return parent, repo
+
+    def test_payload_cwd_repo_process_cwd_nonrepo_scans_and_passes(
+        self, parent_and_repo: tuple[Path, Path]
+    ) -> None:
+        """Clean staged file scans (PASSED, exit 0) even though the hook
+        process runs from a non-repo parent — payload cwd wins."""
+        parent, repo = parent_and_repo
+        _stage_file(repo, "clean.txt", "hello world\n")
+        payload = {"cwd": str(repo), "tool_input": {"command": "git commit -m x"}}
+        code, stderr, _ = run_hook(HOOK, payload, cwd=str(parent))
+        assert code == 0
+        assert "PASSED" in stderr
+
+    def test_git_dash_c_from_nonrepo_parent_scans_and_passes(
+        self, parent_and_repo: tuple[Path, Path]
+    ) -> None:
+        """`git -C <repo> commit` issued from the non-repo parent resolves to
+        the repo and scans it (PASSED, exit 0)."""
+        parent, repo = parent_and_repo
+        _stage_file(repo, "clean.txt", "hello world\n")
+        payload = {
+            "cwd": str(parent),
+            "tool_input": {"command": f"git -C {repo} commit -m x"},
+        }
+        code, stderr, _ = run_hook(HOOK, payload, cwd=str(parent))
+        assert code == 0
+        assert "PASSED" in stderr
+
+    def test_git_dash_c_staged_secret_blocks_without_leaking_it(
+        self, parent_and_repo: tuple[Path, Path]
+    ) -> None:
+        """A staged secret blocks (exit 2) through -C resolution, and the full
+        secret is never printed to stderr (truncated snippet only)."""
+        parent, repo = parent_and_repo
+        fake_secret = "sk-ant-" + "A" * 40
+        _stage_file(repo, "bad.py", f'KEY = "{fake_secret}"\n')
+        payload = {
+            "cwd": str(parent),
+            "tool_input": {"command": f"git -C {repo} commit -m x"},
+        }
+        code, stderr, _ = run_hook(HOOK, payload, cwd=str(parent))
         assert code == 2
+        assert "Anthropic API key" in stderr
+        assert fake_secret not in stderr
+
+
+class TestScanSecretsGateKnownBugs:
+    """Regression tests for formerly-known hook bugs (kept as plain asserts
+    so a reintroduction fails loudly)."""
 
     def test_secret_like_filename_clean_content_should_pass(
         self, git_repo: Path

@@ -165,6 +165,10 @@ DEPRECATED_HOOKS: dict[str, str] = {
     "inject_tool_findings.py": "Retired 2026-08-13: superseded by git pre-commit hook (githooks/pre-commit)",
     "check_docstrings.py": "Retired 2026-08-13: superseded by git pre-commit hook (githooks/pre-commit)",
     "check_random_seeds.py": "Retired 2026-08-13: superseded by git pre-commit hook (githooks/pre-commit)",
+    "test_scan_secrets_on_commit.py": (
+        "Removed 2026-08-26: redundant standalone self-check, superseded by "
+        "tests/test_hooks/test_scan_secrets_gate.py; live copy awaits user rm"
+    ),
 }
 
 KNOWN_LIBRARIES: set[str] = {

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -424,22 +425,40 @@ class TestStep5:
 
 
 class TestStep6:
-    def test_added_type_error_line_warns(self, hook_repo) -> None:
-        """AC-LEG-02: ONE bad line added to an existing committed file ->
-        warned at exactly that line (catches 0-based off-by-one), rc 0."""
+    def test_added_type_error_line_blocks(self, hook_repo) -> None:
+        """AC-LEG-02 (hardened 2026-10-02): ONE bad line added to an existing
+        committed file -> BLOCKED at exactly that line (catches 0-based
+        off-by-one); a month of warn-only pyright findings went unactioned."""
         repo, ledger = hook_repo
         _stage(repo, "typed.py", "x: int = 1\n")
         _commit(repo, ledger, "seed clean file", legs="pyright")
         before = _head_count(repo)
         _stage(repo, "typed.py", 'x: int = 1\ny: int = "s"\n')
         result = _commit(repo, ledger, "add bad line", legs="pyright")
+        assert result.returncode != 0
+        assert _head_count(repo) == before
+        assert BLOCK_HEADER in result.stderr
+        assert WARN_HEADER not in result.stdout + result.stderr
+        assert "typed.py:2" in result.stderr
+        assert "[pyright error]" in result.stderr
+        assert "typed.py:1" not in result.stdout + result.stderr
+        assert "BLOCKED" in ledger.read_text()
+
+    def test_mypy_repo_under_subdir_opts_out_pyright(self, hook_repo) -> None:
+        """The [tool.mypy] opt-out is decided by the NEAREST pyproject.toml
+        walking up from the staged file, not the repo root — universo keeps
+        its Python project under backend/ and was silently pyright-checked."""
+        repo, ledger = hook_repo
+        (repo / "backend").mkdir()
+        (repo / "backend" / "pyproject.toml").write_text("[tool.mypy]\nstrict = true\n")
+        _run(repo, "add", "backend/pyproject.toml")
+        _stage(repo, "backend/typed.py", 'y: int = "s"\n')
+        result = _commit(repo, ledger, "add bad line", legs="pyright")
         combined = result.stdout + result.stderr
         assert result.returncode == 0
-        assert _head_count(repo) == before + 1
-        assert WARN_HEADER in combined
-        assert "typed.py:2" in combined
-        assert "[pyright error]" in combined
-        assert "typed.py:1" not in combined
+        assert "pyright" not in combined
+        text = ledger.read_text() if ledger.exists() else ""
+        assert "error:" not in text
 
     def test_mypy_repo_opts_out(self, hook_repo) -> None:
         """AC-EXC-03: [tool.mypy] in repo pyproject -> pyright leg silent."""
@@ -640,7 +659,7 @@ class TestPyrightLegUnit:
         )
         _canned_pyright(monkeypatch, mod, payload)
         assert mod.pyright_leg({"f.py": {1}}) == [
-            ("f.py", 1, "[pyright error] boom", False)
+            ("f.py", 1, "[pyright error] boom", True)
         ]
 
     def test_pythonpath_only_when_venv_exists(self, monkeypatch, tmp_path) -> None:
@@ -656,13 +675,279 @@ class TestPyrightLegUnit:
         mod.pyright_leg({"f.py": {1}})
         assert calls[1][calls[1].index("--pythonpath") + 1] == str(venv_py)
 
-    def test_mypy_repo_detects_tool_mypy(self, monkeypatch, tmp_path) -> None:
-        """De-vacuouses AC-EXC-03: the opt-out predicate itself is True/False."""
+    def test_uses_mypy_detects_tool_mypy_at_nearest_root(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """De-vacuouses AC-EXC-03: the opt-out predicate itself is True/False,
+        and it reads the NEAREST pyproject (backend/) over the repo root."""
         mod = _load_hook_module(monkeypatch, tmp_path)
         monkeypatch.chdir(tmp_path)
-        assert mod._mypy_repo() is False
-        (tmp_path / "pyproject.toml").write_text("[tool.mypy]\nstrict = true\n")
-        assert mod._mypy_repo() is True
+        (tmp_path / "f.py").write_text("x = 1\n")
+        assert mod._project_root("f.py") is None
+        assert mod._uses_mypy(None) is False
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        assert mod._project_root("f.py") == tmp_path
+        assert mod._uses_mypy(tmp_path) is False
+        backend = tmp_path / "backend"
+        backend.mkdir()
+        (backend / "pyproject.toml").write_text("[tool.mypy]\nstrict = true\n")
+        (backend / "g.py").write_text("x = 1\n")
+        assert mod._project_root("backend/g.py") == backend
+        assert mod._uses_mypy(backend) is True
+        # The root project is still not a mypy project — nearest wins per file.
+        assert mod._uses_mypy(mod._project_root("f.py")) is False
+
+
+# ── mypy / ruff / pytest legs (2026-10-02 hardening) ──────────────────────
+
+
+def _canned_proc(monkeypatch, mod, stdout: str, returncode: int = 0) -> list:
+    """Like _canned_pyright, but the fake CompletedProcess also carries
+    returncode/stderr and the call records kwargs (cwd matters for mypy)."""
+    calls: list = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(stdout=stdout, stderr="", returncode=returncode)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    return calls
+
+
+def _stub_tool(repo: Path, name: str, body: str) -> Path:
+    """Write an executable .venv/bin/<name> stub the hook's _resolve_cmd /
+    _find_venv_python parent-walk will pick over uvx."""
+    stub = repo / ".venv" / "bin" / name
+    stub.parent.mkdir(parents=True, exist_ok=True)
+    stub.write_text("#!/bin/sh\n" + body)
+    stub.chmod(0o755)
+    return stub
+
+
+class TestMypyLeg:
+    def test_error_lines_on_added_lines_block(self, monkeypatch, tmp_path) -> None:
+        """Only `error:` lines on added lines become findings; they block; the
+        process runs with cwd=root so mypy reads that root's [tool.mypy]."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        monkeypatch.chdir(tmp_path)
+        root = tmp_path / "backend"
+        root.mkdir()
+        (root / "pyproject.toml").write_text("[tool.mypy]\n")
+        (root / "f.py").write_text("x = 1\n")
+        payload = (
+            "f.py:2:1: error: boom  [assignment]\n"
+            "f.py:3: note: just a hint\n"
+            "f.py:5: error: not on an added line  [misc]\n"
+        )
+        calls = _canned_proc(monkeypatch, mod, payload, returncode=1)
+        assert mod.mypy_leg(root, {"backend/f.py": {1, 2}}) == [
+            ("backend/f.py", 2, "[mypy error] boom  [assignment]", True)
+        ]
+        cmd, kwargs = calls[0]
+        assert kwargs["cwd"] == root
+        assert "--no-error-summary" in cmd
+        assert cmd[-1] == "f.py", "paths are handed to mypy relative to its root"
+
+    def test_mypy_crash_exit_is_logged_and_skipped(self, monkeypatch, tmp_path) -> None:
+        """Exit 2+ means mypy itself failed (bad config, crash): no findings,
+        an error: ledger line, never a block (global-hook invariant)."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "f.py").write_text("x = 1\n")
+        _canned_proc(monkeypatch, mod, "f.py:1: error: looks real", returncode=2)
+        assert mod.mypy_leg(tmp_path, {"f.py": {1}}) == []
+        assert "error: mypy exited 2" in (tmp_path / "unit-ledger.log").read_text()
+
+    def test_mypy_repo_type_error_blocks_commit(self, hook_repo) -> None:
+        """Integration: [tool.mypy] repo + a mypy stub reporting an error on
+        the added line -> commit BLOCKED with [mypy error]."""
+        repo, ledger = hook_repo
+        (repo / "pyproject.toml").write_text("[tool.mypy]\n")
+        _run(repo, "add", "pyproject.toml")
+        _stub_tool(
+            repo, "mypy", 'echo "typed.py:1:1: error: boom  [assignment]"\nexit 1\n'
+        )
+        before = _head_count(repo)
+        _stage(repo, "typed.py", 'y: int = "s"\n')
+        result = _commit(repo, ledger, "add bad line", legs="mypy")
+        assert result.returncode != 0
+        assert _head_count(repo) == before
+        assert BLOCK_HEADER in result.stderr
+        assert "typed.py:1" in result.stderr
+        assert "[mypy error] boom" in result.stderr
+
+    def test_mypy_stub_garbage_commit_lands(self, hook_repo) -> None:
+        """AC-INV-04 for the mypy leg: a broken tool exits 2 with noise ->
+        commit lands, no traceback, error: ledger line."""
+        repo, ledger = hook_repo
+        (repo / "pyproject.toml").write_text("[tool.mypy]\n")
+        _run(repo, "add", "pyproject.toml")
+        _stub_tool(repo, "mypy", "echo 'segfault-ish nonsense'\nexit 2\n")
+        before = _head_count(repo)
+        _stage(repo, "typed.py", 'y: int = "s"\n')
+        result = _commit(repo, ledger, "add bad line", legs="mypy")
+        assert result.returncode == 0
+        assert _head_count(repo) == before + 1
+        assert "Traceback" not in result.stdout + result.stderr
+        assert "error: mypy exited 2" in ledger.read_text()
+
+
+class TestRuffLeg:
+    def test_only_added_line_violations_block(self, monkeypatch, tmp_path) -> None:
+        """Canned ruff JSON: a hit on an added line blocks, a hit on a
+        pre-existing line is dropped (diff-scoping), code lands in the tag."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "f.py").write_text("x = 1\n")
+        payload = (
+            '[{"filename": "%s/f.py", "code": "F821", "message": "Undefined name `y`",'
+            ' "location": {"row": 1, "column": 1}},'
+            ' {"filename": "%s/f.py", "code": "E722", "message": "bare except",'
+            ' "location": {"row": 7, "column": 1}}]' % (tmp_path, tmp_path)
+        )
+        _canned_proc(monkeypatch, mod, payload, returncode=1)
+        assert mod.ruff_leg({"f.py": {1, 2}}) == [
+            ("f.py", 1, "[ruff F821] Undefined name `y`", True)
+        ]
+
+    def test_non_json_output_logged_and_skipped(self, monkeypatch, tmp_path) -> None:
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _canned_proc(monkeypatch, mod, "ruff: not json", returncode=2)
+        assert mod.ruff_leg({"f.py": {1}}) == []
+        assert (
+            "error: ruff emitted non-JSON" in (tmp_path / "unit-ledger.log").read_text()
+        )
+
+    def test_bare_except_on_added_line_blocks_commit(self, hook_repo) -> None:
+        """Integration with REAL ruff (E722 is in ruff's default rule set):
+        the bare-except guarantee that used to live in the Stop hook
+        (whole-file, nagging) now lives here, diff-scoped and blocking."""
+        repo, ledger = hook_repo
+        real_ruff = shutil.which("ruff")
+        if real_ruff is None:
+            pytest.skip("real ruff not found on PATH")
+        stub = repo / ".venv" / "bin" / "ruff"
+        stub.parent.mkdir(parents=True)
+        stub.symlink_to(real_ruff)
+        _stage(repo, "app.py", "x = 1\n")
+        _commit(repo, ledger, "seed clean file", legs="ruff")
+        before = _head_count(repo)
+        _stage(repo, "app.py", "x = 1\ntry:\n    y = 2\nexcept:\n    pass\n")
+        result = _commit(repo, ledger, "add bare except", legs="ruff")
+        assert result.returncode != 0
+        assert _head_count(repo) == before
+        assert BLOCK_HEADER in result.stderr
+        assert "[ruff E722]" in result.stderr
+        assert "app.py:4" in result.stderr
+        assert "app.py:1" not in result.stderr
+
+
+OPT_IN = "[tool.claude-precommit]\npytest = true\n"
+
+
+class TestPytestLeg:
+    def test_opt_in_predicate(self, monkeypatch, tmp_path) -> None:
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        pp = tmp_path / "pyproject.toml"
+        assert mod._pytest_opt_in(tmp_path) is False  # missing file
+        pp.write_text("[project]\nname = 'x'\n")
+        assert mod._pytest_opt_in(tmp_path) is False
+        pp.write_text("[tool.claude-precommit]\npytest = false\n")
+        assert mod._pytest_opt_in(tmp_path) is False
+        pp.write_text(OPT_IN)
+        assert mod._pytest_opt_in(tmp_path) is True
+        pp.write_text("[tool.claude-precommit\npytest = true\n")  # malformed
+        assert mod._pytest_opt_in(tmp_path) is False
+        assert "unreadable" in (tmp_path / "unit-ledger.log").read_text()
+
+    def _opted_in_repo(self, hook_repo, stub_body: str, log: Path):
+        repo, ledger = hook_repo
+        (repo / "pyproject.toml").write_text(OPT_IN)
+        _run(repo, "add", "pyproject.toml")
+        _stub_tool(repo, "python", f'echo "python $@" >> {log}\n' + stub_body)
+        _stage(repo, "mod.py", "x = 1\n")
+        return repo, ledger
+
+    def test_failing_suite_blocks_commit(self, hook_repo, tmp_path) -> None:
+        log = tmp_path / "python_calls.log"
+        repo, ledger = self._opted_in_repo(
+            hook_repo,
+            'echo "FAILED tests/test_x.py::test_y"\necho "1 failed in 0.10s"\nexit 1\n',
+            log,
+        )
+        before = _head_count(repo)
+        result = _commit(repo, ledger, "add mod", legs="pytest")
+        assert result.returncode != 0
+        assert _head_count(repo) == before
+        assert BLOCK_HEADER in result.stderr
+        assert "[pytest] 1 failed in 0.10s" in result.stderr
+        assert "FAILED tests/test_x.py::test_y" in result.stderr, (
+            "output tail reaches the committer"
+        )
+        assert "-m pytest -x -q" in log.read_text()
+        # One ledger record per line: the multi-line pytest tail went to stderr,
+        # the finding itself is the one-line summary. root is relative to the repo.
+        assert (
+            "BLOCKED 1 finding(s): .:0 [pytest] 1 failed in 0.10s" in ledger.read_text()
+        )
+
+    def test_passing_suite_commit_lands(self, hook_repo, tmp_path) -> None:
+        log = tmp_path / "python_calls.log"
+        repo, ledger = self._opted_in_repo(
+            hook_repo, 'echo "3 passed in 0.10s"\nexit 0\n', log
+        )
+        before = _head_count(repo)
+        result = _commit(repo, ledger, "add mod", legs="pytest")
+        assert result.returncode == 0
+        assert _head_count(repo) == before + 1
+        assert BLOCK_HEADER not in result.stderr
+        assert "-m pytest -x -q" in log.read_text()
+
+    def test_no_tests_collected_warns_only(self, hook_repo, tmp_path) -> None:
+        log = tmp_path / "python_calls.log"
+        repo, ledger = self._opted_in_repo(
+            hook_repo, 'echo "no tests ran"\nexit 5\n', log
+        )
+        before = _head_count(repo)
+        result = _commit(repo, ledger, "add mod", legs="pytest")
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0
+        assert _head_count(repo) == before + 1
+        assert WARN_HEADER in combined
+        assert "[pytest] no tests collected" in combined
+
+    def test_without_opt_in_pytest_never_runs(self, hook_repo, tmp_path) -> None:
+        repo, ledger = hook_repo
+        log = tmp_path / "python_calls.log"
+        (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        _run(repo, "add", "pyproject.toml")
+        _stub_tool(repo, "python", f'echo "python $@" >> {log}\nexit 1\n')
+        _stage(repo, "mod.py", "x = 1\n")
+        result = _commit(repo, ledger, "add mod", legs="pytest")
+        assert result.returncode == 0
+        assert not log.exists(), "python stub must not be invoked without the opt-in"
+
+    def test_legs_knob_disables_pytest(self, hook_repo, tmp_path) -> None:
+        log = tmp_path / "python_calls.log"
+        repo, ledger = self._opted_in_repo(hook_repo, "exit 1\n", log)
+        result = _commit(repo, ledger, "add mod", legs="bandit")
+        assert result.returncode == 0
+        assert not log.exists()
+
+    def test_malformed_pyproject_commit_lands_with_error_line(
+        self, hook_repo, tmp_path
+    ) -> None:
+        repo, ledger = hook_repo
+        (repo / "pyproject.toml").write_text("[tool.claude-precommit\npytest = true\n")
+        _run(repo, "add", "pyproject.toml")
+        _stage(repo, "mod.py", "x = 1\n")
+        before = _head_count(repo)
+        result = _commit(repo, ledger, "add mod", legs="pytest")
+        assert result.returncode == 0
+        assert _head_count(repo) == before + 1
+        assert "Traceback" not in result.stdout + result.stderr
+        assert "error:" in ledger.read_text() and "unreadable" in ledger.read_text()
 
 
 # ── added_lines() unit tests (monkeypatched _git, canned diff text) ────────

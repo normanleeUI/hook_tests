@@ -149,10 +149,10 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
 }
 
 DEPRECATED_HOOKS: dict[str, str] = {
-    "mypy_check.sh": "Unwired 2026-06-13: pyright preferred",
-    "log_new_dependency.py": "Unwired 2026-06-13: redundant with pip_audit_check",
-    "r_style_check.sh": "Unwired 2026-06-13: R not actively used",
-    "plan_runner_write_gate.py": "Never wired: plan runner concept abandoned",
+    "mypy_check.sh": "Unwired 2026-06-13: pyright preferred; removed from repo 2026-10-02",
+    "log_new_dependency.py": "Unwired 2026-06-13: redundant with pip_audit_check; removed from repo 2026-10-02",
+    "r_style_check.sh": "Unwired 2026-06-13: R not actively used; removed from repo 2026-10-02",
+    "plan_runner_write_gate.py": "Never wired: plan runner concept abandoned; removed from repo 2026-10-02",
     "check_test_pair.py": "Unwired 2026-06-21: obsolete, uses dead stdout channel",
     # Removed from the repo 2026-07-17. Originally superseded by the Stop hook
     # batch_checks.sh; as of 2026-08-13 these tools run in the git pre-commit

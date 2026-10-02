@@ -276,19 +276,69 @@ class TestRuffLint:
         )
         py_file.write_text(content)
 
-    def test_blocks_on_bare_except(self, fake_tool_env, tmp_path):
-        """A remaining bare except (E722) blocks with exit 2 (Tier-2 #8)."""
+    def test_bare_except_no_longer_blocks_at_stop(self, fake_tool_env, tmp_path):
+        """Negative test (test_quality #6): the Stop hook is auto-fix only since
+        2026-10-02. A remaining E722 is REPORTED by ruff's own output but never
+        exits 2 — the blocking, diff-scoped E722 check lives in the pre-commit
+        ruff leg (test_precommit_hook.TestRuffLeg)."""
         env, _ = fake_tool_env
         self._setup_repo_with_real_ruff(tmp_path)
         self._commit_then_rewrite(tmp_path, "try:\n    x = 1\nexcept:\n    pass\n")
 
         rc, stderr, stdout = run_bash_hook(
-            "ruff_lint.sh", {}, env=env, cwd=str(tmp_path)
+            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
         )
 
-        assert rc == 2, f"bare except should block, got rc={rc} (stderr: {stderr})"
-        assert "E722" in stderr
-        assert "app.py" in stderr, "block message should name the offending file"
+        assert rc == 0, f"Stop hook must not block, got rc={rc} (stderr: {stderr})"
+        assert "BLOCKED" not in stderr
+        assert "ALLOW  lint-fixed n=1" in _debug_log(tmp_path)
+
+    def _collab_repo_with_dirty_py(self, root, log_file):
+        """Init a repo at *root* whose .venv/bin/ruff is a logging stub, with
+        one committed-then-modified app.py so ruff_lint has work to do."""
+        root.mkdir(parents=True)
+        _init_git_repo(root)
+        venv_bin = root / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        stub = venv_bin / "ruff"
+        stub.write_text(f'#!/usr/bin/env bash\necho "ruff $@" >> {log_file}\nexit 0\n')
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        py_file = root / "app.py"
+        py_file.write_text("x = 1\n")
+        subprocess.run(["git", "-C", str(root), "add", "app.py"], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-m", "add app"], check=True, capture_output=True
+        )
+        py_file.write_text("x = 2\n")
+
+    def test_skips_collab_repo(self, fake_tool_env, tmp_path):
+        """Collab gate (2026-10-02, mirrors ruff_format.sh): a repo under a
+        literal /collab/ path component is never lint-fixed — the Stop hook
+        would otherwise rewrite lines the session did not touch in a team file."""
+        env, log_file = fake_tool_env
+        repo = tmp_path / "collab" / "team_project"
+        self._collab_repo_with_dirty_py(repo, log_file)
+
+        rc, stderr, _ = run_bash_hook(
+            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(repo)
+        )
+
+        assert rc == 0
+        assert _read_log(log_file) == "", "ruff must not run on a collab repo"
+        assert "SKIP   collab project" in _debug_log(tmp_path)
+
+    def test_collab_substring_dir_still_linted(self, fake_tool_env, tmp_path):
+        """Only a literal /collab/ component gates; collaboration_tools/ is linted."""
+        env, log_file = fake_tool_env
+        repo = tmp_path / "collaboration_tools" / "proj"
+        self._collab_repo_with_dirty_py(repo, log_file)
+
+        rc, _, _ = run_bash_hook(
+            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(repo)
+        )
+
+        assert rc == 0
+        assert "ruff check --extend-select T20 --fix" in _read_log(log_file)
 
     def test_clean_file_not_blocked(self, fake_tool_env, tmp_path):
         """A changed file with no E722 violation exits 0 (no false block)."""

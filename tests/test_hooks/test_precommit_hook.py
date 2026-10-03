@@ -496,21 +496,24 @@ class TestStep6:
 
 
 class TestStep7:
-    def test_added_pdb_line_warns(self, hook_repo) -> None:
-        """AC-LEG-03: ONE pdb.set_trace() line added to an existing committed
-        file -> warned at exactly that line via the vendored ruleset, rc 0."""
+    def test_added_warning_line_warns(self, hook_repo) -> None:
+        """Integration with REAL semgrep + the vendored ruleset: a WARNING-
+        severity finding on an added line warns and the commit lands; the
+        pre-existing line is not reported. Uses string-concat-in-list — the
+        2026-10-02 tier audit promoted pdb-remove to blocking (see
+        TestTierPolicy), so this test moved to a rule that stays advisory."""
         repo, ledger = hook_repo
-        _stage(repo, "probe.py", "import pdb\n")
+        _stage(repo, "probe.py", "y = 1\n")
         _commit(repo, ledger, "seed clean file", legs="semgrep")
         before = _head_count(repo)
-        _stage(repo, "probe.py", "import pdb\npdb.set_trace()\n")
-        result = _commit(repo, ledger, "add pdb line", legs="semgrep")
+        _stage(repo, "probe.py", 'y = 1\nx = ["a" "b"]\n')
+        result = _commit(repo, ledger, "add implicit concat", legs="semgrep")
         combined = result.stdout + result.stderr
-        assert result.returncode == 0
+        assert result.returncode == 0, combined
         assert _head_count(repo) == before + 1
         assert WARN_HEADER in combined
         assert "probe.py:2" in combined
-        assert "[semgrep pdb-remove]" in combined
+        assert "[semgrep string-concat-in-list]" in combined
         assert "probe.py:1" not in combined
 
     def test_missing_ruleset_loud_but_commit_lands(self, tmp_path) -> None:
@@ -706,6 +709,97 @@ class TestSuppressionLeg:
         result = _commit(repo, ledger, "clean addition", legs="suppression")
         assert result.returncode == 0, result.stderr
         assert _head_count(repo) == before + 1
+
+
+class TestTierPolicy:
+    """2026-10-02 tier audit: per-rule promotions out of the discarded tiers."""
+
+    def test_bandit_runs_at_l_and_promotes_hardcoded_password(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Command uses -l (all severities); the leg keeps MEDIUM/HIGH plus
+        B105-B107, and drops the rest of LOW (B101 assert) silently."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        payload = (
+            '{"results": ['
+            '{"filename": "f.py", "line_number": 1, "test_id": "B101",'
+            ' "issue_severity": "LOW", "issue_text": "assert used"},'
+            '{"filename": "f.py", "line_number": 2, "test_id": "B105",'
+            ' "issue_severity": "LOW", "issue_text": "hardcoded password"},'
+            '{"filename": "f.py", "line_number": 3, "test_id": "B602",'
+            ' "issue_severity": "HIGH", "issue_text": "shell=True"}]}'
+        )
+        calls = _canned_proc(monkeypatch, mod, payload, returncode=1)
+        hits = mod.bandit_leg("f.py", {1, 2, 3})
+        assert [(h[1], h[3]) for h in hits] == [(2, True), (3, True)]
+        assert "B105" in hits[0][2]
+        cmd = calls[0][0]
+        assert "-l" in cmd and "-ll" not in cmd
+
+    def test_hardcoded_password_blocks_commit(self, hook_repo) -> None:
+        """Integration with REAL bandit: B105 is LOW severity, so -ll used to
+        drop it; now an added `password = "..."` blocks."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "cfg.py", 'password = "correct-horse-battery"\n')
+        result = _commit(repo, ledger, "hardcode it", legs="bandit")
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert _head_count(repo) == before
+        assert "B105" in result.stderr
+
+    def test_low_assert_still_dropped_in_commit(self, hook_repo) -> None:
+        """Real bandit: a bare assert (B101 LOW) neither blocks nor warns —
+        the rest of LOW is discarded, not demoted to the dead warn channel."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "chk.py", "x = 1\nassert x == 1\n")
+        result = _commit(repo, ledger, "assert", legs="bandit")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+        assert "B101" not in result.stdout + result.stderr
+
+    def test_semgrep_promoted_warning_blocks(self, monkeypatch, tmp_path) -> None:
+        """A WARNING rule in the promoted set blocks; another WARNING rule
+        stays advisory; the set holds exactly the five audited IDs."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        monkeypatch.chdir(tmp_path)
+        rules = tmp_path / "semgrep_rules" / "rules"
+        rules.mkdir(parents=True)
+        (rules / "python.yaml").write_text("rules: []\n")
+        monkeypatch.setattr(mod, "_SEMGREP_RULES", rules)
+        payload = (
+            '{"results": ['
+            '{"path": "f.py", "start": {"line": 1},'
+            ' "check_id": "python.lang.correctness.pdb.pdb-remove",'
+            ' "extra": {"message": "pdb left in", "severity": "WARNING"}},'
+            '{"path": "f.py", "start": {"line": 2},'
+            ' "check_id": "python.lang.correctness.string-concat-in-list",'
+            ' "extra": {"message": "missing comma?", "severity": "WARNING"}}]}'
+        )
+        _canned_pyright(monkeypatch, mod, payload)
+        assert mod.semgrep_leg({"f.py": {1, 2}}) == [
+            ("f.py", 1, "[semgrep pdb-remove] pdb left in", True),
+            ("f.py", 2, "[semgrep string-concat-in-list] missing comma?", False),
+        ]
+        assert mod._SEMGREP_PROMOTED_WARNINGS == {
+            "pdb-remove",
+            "dict-del-while-iterate",
+            "sync-sleep-in-async-code",
+            "test-is-missing-assert",
+            "file-object-redefined-before-close",
+        }
+
+    def test_semgrep_pdb_blocks_commit(self, hook_repo) -> None:
+        """Integration with REAL semgrep + the vendored ruleset: an added
+        `pdb.set_trace()` (WARNING in the ruleset) now BLOCKS instead of
+        warning — the Step 7 characterization test's inverse."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "dbg.py", "import pdb\npdb.set_trace()\n")
+        result = _commit(repo, ledger, "debugger left in", legs="semgrep")
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert _head_count(repo) == before
+        assert "pdb-remove" in result.stderr
 
 
 class TestPyrightLegUnit:

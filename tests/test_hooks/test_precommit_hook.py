@@ -641,6 +641,73 @@ class TestLogOneRecordPerLine:
         assert "line one" in lines[0] and "line three" in lines[0]
 
 
+class TestSuppressionLeg:
+    def test_markers_on_added_lines_block_justified_ones_pass(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """2026-10-02: the Edit|Write hook never fires for Bash-made edits, so
+        suppression markers must be caught at commit. Unjustified markers on
+        added lines block; the same justification escapes as
+        block_suppressions.py pass; markers inside strings or docstrings (test
+        payloads, docs describing the markers) are not comments."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        lines = [
+            '"""Docs describing `# noqa` and `# type: ignore` markers.',  # 1 docstring
+            'More docstring: use `# nosec` sparingly."""',  # 2 docstring
+            "x = 1  # noqa",  # 3 BLOCK
+            "y = 2  # noqa: E501  # noqa-reason: generated table",  # 4 ok
+            "import os  # noqa: E402",  # 5 ok (pre-approved)
+            "z: int = 's'  # type: ignore",  # 6 BLOCK
+            "w: int = 's'  # type: ignore[assignment]  # known-issue: upstream stub",  # 7 ok
+            "subprocess.call(cmd, shell=True)  # nosec",  # 8 BLOCK
+            "v = 1  # pyright: ignore",  # 9 BLOCK
+            "def dead():  # pragma: no cover",  # 10 BLOCK
+            "@pytest.mark.skip",  # 11 BLOCK
+            "@pytest.mark.skipif(sys.platform == 'win32', reason='posix only')",  # 12 ok
+            "@pytest.mark.xfail(strict=True)",  # 13 BLOCK
+            'PAYLOAD = "x = 1  # noqa\\n"',  # 14 ok: inside a string
+            "a = 1  # unrelated comment",  # 15 ok
+            "b = 2  # NOQA",  # 16 not added -> ignored
+        ]
+        added = set(range(1, 16))
+        hits = mod._suppression_hits(lines, added)
+        assert [n for n, _ in hits] == [3, 6, 8, 9, 10, 11, 13]
+        msgs = dict(hits)
+        assert "noqa-reason" in msgs[3]
+        assert "known-issue" in msgs[6]
+        assert "skipif" in msgs[11]
+
+    def test_noqa_on_added_line_blocks_commit(self, hook_repo) -> None:
+        """Integration: an added `# noqa` blocks with the [suppression] tag and
+        the fix-or-justify instruction; a pre-approved `# noqa: E402` lands."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "mod.py", "import os  # noqa: E402\nprint(os.sep)\n")
+        result = _commit(repo, ledger, "pre-approved e402", legs="suppression")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+        _stage(repo, "mod.py", "import os  # noqa: E402\nprint(os.sep)  # noqa\n")
+        result = _commit(repo, ledger, "dodge the linter", legs="suppression")
+        assert result.returncode == 1
+        assert _head_count(repo) == before + 1
+        assert "[suppression]" in result.stderr
+        assert "mod.py:2" in result.stderr
+        assert "noqa-reason" in result.stderr
+        assert "BLOCKED" in ledger.read_text()
+
+    def test_preexisting_marker_not_reported(self, hook_repo) -> None:
+        """Diff-scoped: a `# noqa` already in HEAD does not block a commit that
+        adds an unrelated clean line (legacy stays legacy)."""
+        repo, ledger = hook_repo
+        _stage(repo, "legacy.py", "x = 1  # noqa\n")
+        _commit(repo, ledger, "seed legacy", legs="")  # no legs: lands regardless
+        before = _head_count(repo)
+        _stage(repo, "legacy.py", "x = 1  # noqa\ny = 2\n")
+        result = _commit(repo, ledger, "clean addition", legs="suppression")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+
+
 class TestPyrightLegUnit:
     def test_warning_severity_excluded(self, monkeypatch, tmp_path) -> None:
         """Errors only: a warning-severity diagnostic produces no finding."""

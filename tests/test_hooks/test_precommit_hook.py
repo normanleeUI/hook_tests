@@ -627,6 +627,20 @@ def _canned_pyright(monkeypatch, mod, payload: str) -> list:
     return calls
 
 
+class TestLogOneRecordPerLine:
+    def test_embedded_newlines_collapsed(self, monkeypatch, tmp_path) -> None:
+        """2026-10-02: pyright messages carry embedded newlines, which spread one
+        finding over several ledger lines and broke the grep-based read-outs.
+        _log must keep the ledger one record per line."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        ledger = tmp_path / "ledger.log"
+        monkeypatch.setattr(mod, "_LOG", ledger)
+        mod._log("pyright: line one\n  continuation\nline three")
+        lines = ledger.read_text().splitlines()
+        assert len(lines) == 1
+        assert "line one" in lines[0] and "line three" in lines[0]
+
+
 class TestPyrightLegUnit:
     def test_warning_severity_excluded(self, monkeypatch, tmp_path) -> None:
         """Errors only: a warning-severity diagnostic produces no finding."""

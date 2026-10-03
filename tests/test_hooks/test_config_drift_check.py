@@ -14,6 +14,7 @@ this feature, and the fake tree keeps the test hermetic either way.
 from __future__ import annotations
 
 import datetime
+import os
 import shutil
 import stat
 import subprocess
@@ -154,6 +155,25 @@ def test_in_sync_current_stamp_untouched(fake_home):
     (home / ".claude/.last_install").write_text(original)
     run_hook(home, repo)
     assert (home / ".claude/.last_install").read_text() == original
+
+
+def test_in_sync_stale_stamp_read_only_warns_and_leaves_stamp(fake_home):
+    """2026-08-29: ~/.claude/.last_install can be read-only in-sandbox. When the
+    self-heal cannot write, the hook must say so (stdout notice + WARN log line)
+    and leave the stamp byte-identical, rather than leak a redirect error."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores file modes")
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    stamp = home / ".claude/.last_install"
+    original = "2026-01-01T00:00:00-07:00 deadbee\n"
+    stamp.write_text(original)
+    stamp.chmod(0o444)
+    out = run_hook(home, repo)
+    assert stamp.read_text() == original
+    assert "read-only" in out
+    log = (home / "hook_debug.log").read_text()
+    assert "WARN   stamp stale (deadbee -> " in log
 
 
 def test_debug_log_decision_line_and_dated_timestamp(fake_home):

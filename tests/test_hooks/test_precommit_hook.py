@@ -824,6 +824,45 @@ class TestRuffLeg:
             ("f.py", 1, "[ruff F821] Undefined name `y`", True)
         ]
 
+    def test_c901_pushed_globally_on_cli(self, monkeypatch, tmp_path) -> None:
+        """2026-10-02 (radon (7) closure): the complexity trip-wire rides the
+        CLI so it applies on top of every project's own ruff config."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        monkeypatch.chdir(tmp_path)
+        calls = _canned_pyright(monkeypatch, mod, "[]")
+        assert mod.ruff_leg({"f.py": {1}}) == []
+        cmd = calls[0]
+        assert cmd[cmd.index("--extend-select") + 1] == "C901"
+        assert cmd[cmd.index("--config") + 1] == "lint.mccabe.max-complexity=15"
+
+    def test_new_over_complex_function_blocks_commit(self, hook_repo) -> None:
+        """Integration with REAL ruff: a newly added function with CC 17
+        blocks (C901 > 15) even though the repo configures no ruff rules;
+        one with CC 11 lands — the threshold is 15, not ruff's default 10."""
+        repo, ledger = hook_repo
+        real_ruff = shutil.which("ruff")
+        if real_ruff is None:
+            pytest.skip("real ruff not found on PATH")
+        stub = repo / ".venv" / "bin" / "ruff"
+        stub.parent.mkdir(parents=True)
+        stub.symlink_to(real_ruff)
+
+        def branchy(n: int) -> str:
+            body = "".join(f"    if x == {i}:\n        return {i}\n" for i in range(n))
+            return f"def f(x):\n{body}    return -1\n"
+
+        before = _head_count(repo)
+        _stage(repo, "mod.py", branchy(10))  # CC 11: over ruff's default, under ours
+        result = _commit(repo, ledger, "eleven branches", legs="ruff")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+        _stage(repo, "big.py", branchy(16))  # CC 17
+        result = _commit(repo, ledger, "seventeen branches", legs="ruff")
+        assert result.returncode == 1
+        assert _head_count(repo) == before + 1
+        assert "[ruff C901]" in result.stderr
+        assert "big.py:1" in result.stderr
+
     def test_non_json_output_logged_and_skipped(self, monkeypatch, tmp_path) -> None:
         mod = _load_hook_module(monkeypatch, tmp_path)
         monkeypatch.chdir(tmp_path)

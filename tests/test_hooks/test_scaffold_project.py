@@ -174,3 +174,31 @@ class TestGithubOnly:
         assert result.returncode != 0
         assert "uv.lock" in result.stderr
         assert not (proj / ".github").exists()
+
+
+class TestGithubUnwritable:
+    """In Claude's sandbox `.github` at the project root is masked by /dev/null,
+    so the model-run scaffold can't write it. A file squatting on `.github`
+    reproduces that: the rest of the layout must still land, and the output
+    must hand the user the `!` command instead of crashing mid-scaffold."""
+
+    def test_skips_github_and_tells_user(self, tmp_path):
+        proj = tmp_path / "proj"
+        _make_uv_project(proj)
+        (proj / ".github").write_text("")
+        result = run_scaffold(proj)
+        assert result.returncode == 0, result.stderr
+        assert (proj / "CLAUDE.md").exists()
+        assert "--github-only" in result.stdout
+
+    def test_github_only_fails_loudly(self, tmp_path):
+        proj = tmp_path / "proj"
+        _make_uv_project(proj)
+        (proj / ".github").write_text("")
+        result = subprocess.run(
+            [sys.executable, str(HOOKS_DIR / SCRIPT), "--github-only"],
+            cwd=proj, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode != 0
+        assert "Traceback" not in result.stderr
+        assert ".github" in result.stderr

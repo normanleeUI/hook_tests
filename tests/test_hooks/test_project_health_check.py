@@ -65,7 +65,9 @@ def _make_project(path: Path, items: set[str]) -> None:
     if "claude-md" in items:
         (path / "CLAUDE.md").write_text("# spec\n")
     if "ci" in items:
-        (path / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+        wf = path / ".github" / "workflows"
+        wf.mkdir(parents=True, exist_ok=True)
+        (wf / "ci.yml").write_text("on: push\n")
 
 
 def _run_health(cwd: Path, env: dict[str, str] | None = None):
@@ -248,3 +250,23 @@ class TestProjectHealthOutput:
         context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
         assert ".gitignore" in context
         assert "LIGHT health-check mode" in context
+
+
+class TestCiItem:
+    def test_empty_workflows_dir_still_flags_ci(self, tmp_path):
+        """A bare .github/workflows/ runs nothing — it must not count as CI."""
+        _make_project(tmp_path, ALL_ITEMS - {"ci"})
+        (tmp_path / ".github" / "workflows").mkdir(parents=True)
+        rc, _stderr, stdout = _run_health(tmp_path)
+        assert rc == 0
+        context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+        assert "CI" in context
+        # The sandbox masks .github/, so the user must run the scaffold via `!`.
+        assert "--github-only" in context
+
+    def test_health_ignore_suppresses_ci(self, tmp_path):
+        _make_project(tmp_path, ALL_ITEMS - {"ci"})
+        (tmp_path / ".health-ignore").write_text("# no CI by design\nci\n")
+        rc, _stderr, stdout = _run_health(tmp_path)
+        assert rc == 0
+        assert stdout.strip() == ""

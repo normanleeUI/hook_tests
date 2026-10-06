@@ -108,3 +108,69 @@ class TestNeverOverwrites:
         assert content.startswith("*.log\n.env\n")  # existing lines preserved
         assert content.count(".env\n") == 1  # already-present entry not duplicated
         assert "outputs/" in content  # missing entries appended
+
+
+def _make_uv_project(proj: Path) -> None:
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (proj / "uv.lock").write_text("version = 1\n")
+
+
+class TestGithubFiles:
+    """CI + Dependabot are emitted only for uv projects — the template runs
+    `uv sync --locked`, which would fail every push anywhere else."""
+
+    def test_uv_project_gets_ci_and_dependabot(self, tmp_path):
+        proj = tmp_path / "proj"
+        _make_uv_project(proj)
+        run_scaffold(proj)
+        ci = (proj / ".github" / "workflows" / "ci.yml").read_text()
+        assert "uv sync --locked" in ci
+        assert "pyright" in ci and "ruff" in ci and "pytest" in ci
+        assert "package-ecosystem: uv" in (proj / ".github" / "dependabot.yml").read_text()
+
+    def test_non_uv_project_gets_no_github_files(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "renv.lock").write_text("{}")
+        run_scaffold(proj)
+        assert not (proj / ".github").exists()
+
+    def test_existing_ci_untouched(self, tmp_path):
+        proj = tmp_path / "proj"
+        _make_uv_project(proj)
+        wf = proj / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "ci.yml").write_text("# mine\n")
+        run_scaffold(proj)
+        assert (wf / "ci.yml").read_text() == "# mine\n"
+
+
+class TestGithubOnly:
+    """--github-only retrofits an existing repo without imposing the layout."""
+
+    def test_writes_only_github_files(self, tmp_path):
+        proj = tmp_path / "proj"
+        _make_uv_project(proj)
+        result = subprocess.run(
+            [sys.executable, str(HOOKS_DIR / SCRIPT), "--github-only"],
+            cwd=proj, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0
+        assert (proj / ".github" / "workflows" / "ci.yml").exists()
+        assert (proj / ".github" / "dependabot.yml").exists()
+        for absent in ("docs", "src", "tests", "CLAUDE.md", ".gitignore"):
+            assert not (proj / absent).exists(), f"--github-only created {absent}"
+
+    def test_non_uv_project_fails_loudly(self, tmp_path):
+        """Explicitly asked for CI on a repo the template can't serve → say so,
+        non-zero, rather than a silent no-op."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        result = subprocess.run(
+            [sys.executable, str(HOOKS_DIR / SCRIPT), "--github-only"],
+            cwd=proj, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode != 0
+        assert "uv.lock" in result.stderr
+        assert not (proj / ".github").exists()

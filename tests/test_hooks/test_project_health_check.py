@@ -29,7 +29,7 @@ phc = pytest.importorskip("project_health_check")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-ALL_ITEMS = {"git", "venv", "deps", "gitignore", "readme", "claude-md", "ci"}
+ALL_ITEMS = {"git", "venv", "deps", "gitignore", "readme", "claude-md", "ci", "layout"}
 
 
 def _init_git_repo(path: Path) -> None:
@@ -68,6 +68,9 @@ def _make_project(path: Path, items: set[str]) -> None:
         wf = path / ".github" / "workflows"
         wf.mkdir(parents=True, exist_ok=True)
         (wf / "ci.yml").write_text("on: push\n")
+    if "layout" in items:
+        (path / "tests").mkdir(exist_ok=True)
+        (path / "docs").mkdir(exist_ok=True)
 
 
 def _run_health(cwd: Path, env: dict[str, str] | None = None):
@@ -261,8 +264,8 @@ class TestCiItem:
         assert rc == 0
         context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
         assert "CI" in context
-        # The sandbox masks .github/, so the user must run the scaffold via `!`.
-        assert "--github-only" in context
+        # Setup gaps route to the one standard fix, not ad-hoc instructions.
+        assert "/project-setup" in context
 
     def test_health_ignore_suppresses_ci(self, tmp_path):
         _make_project(tmp_path, ALL_ITEMS - {"ci"})
@@ -270,3 +273,85 @@ class TestCiItem:
         rc, _stderr, stdout = _run_health(tmp_path)
         assert rc == 0
         assert stdout.strip() == ""
+
+
+def _report(cwd: Path) -> dict:
+    result = subprocess.run(
+        [sys.executable, str(HOOKS_DIR / "project_health_check.py"), "--report"],
+        cwd=cwd, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+class TestReportMode:
+    """--report is /project-setup's entry and exit check: always prints, slugs not labels."""
+
+    def test_lists_missing_slugs(self, tmp_path):
+        _make_project(tmp_path, ALL_ITEMS - {"readme", "layout"})
+        report = _report(tmp_path)
+        assert report["category"] == "solo"
+        assert set(report["missing"]) == {"readme", "layout"}
+
+    def test_prints_even_when_healthy(self, tmp_path):
+        _make_project(tmp_path, ALL_ITEMS)
+        assert _report(tmp_path)["missing"] == []
+
+    def test_respects_health_ignore(self, tmp_path):
+        _make_project(tmp_path, ALL_ITEMS - {"readme"})
+        (tmp_path / ".health-ignore").write_text("readme\n")
+        report = _report(tmp_path)
+        assert report["missing"] == []
+        assert "readme" in report["ignored"]
+
+
+class TestLayoutItem:
+    def test_solo_without_tests_dir_flagged(self, tmp_path):
+        _make_project(tmp_path, ALL_ITEMS - {"layout"})
+        (tmp_path / "docs").mkdir()
+        assert "layout" in _report(tmp_path)["missing"]
+
+    def test_collab_ignores_layout(self, tmp_path):
+        proj = tmp_path / "collab" / "proj"
+        proj.mkdir(parents=True)
+        _make_project(proj, {"git", "gitignore"})
+        assert _report(proj)["missing"] == []
+
+    def test_health_ignore_silences_layout(self, tmp_path):
+        _make_project(tmp_path, ALL_ITEMS - {"layout"})
+        (tmp_path / ".health-ignore").write_text("layout\n")
+        rc, _stderr, stdout = _run_health(tmp_path)
+        assert rc == 0
+        assert stdout.strip() == ""
+
+
+class TestOnScreenMessage:
+    """The systemMessage is the only part the user sees: it must name the gaps
+    and the one command that fixes them."""
+
+    def test_names_slugs_and_points_at_skill(self, tmp_path):
+        _make_project(tmp_path, ALL_ITEMS - {"readme", "ci"})
+        _rc, _stderr, stdout = _run_health(tmp_path)
+        msg = json.loads(stdout)["systemMessage"]
+        assert "/project-setup" in msg
+        assert "readme" in msg and "ci" in msg
+
+    def test_contributing_only_has_no_setup_pointer(self, tmp_path):
+        _make_project(tmp_path, ALL_ITEMS)
+        (tmp_path / "CONTRIBUTING.md").write_text("# c\n")
+        _rc, _stderr, stdout = _run_health(tmp_path)
+        assert "/project-setup" not in json.loads(stdout)["systemMessage"]
+
+
+def test_report_sees_committed_ci_when_github_masked(tmp_path):
+    """In Claude's sandbox `.github` is a /dev/null mask, so --report (run via
+    Bash) can't see the files; committed CI must still count, read from git."""
+    _make_project(tmp_path, ALL_ITEMS)
+    subprocess.run(["git", "-C", str(tmp_path), "add", ".github"], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-qm", "ci"], check=True,
+    )
+    import shutil
+    shutil.rmtree(tmp_path / ".github")
+    (tmp_path / ".github").write_text("")  # stands in for the mask
+    assert "ci" not in _report(tmp_path)["missing"]

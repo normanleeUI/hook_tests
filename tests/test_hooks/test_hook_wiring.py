@@ -13,9 +13,7 @@ from pathlib import Path
 
 import pytest
 
-# Both paths are env-overridable so the suite can run against the vendored
-# hooks/ dir (see hooks/ in the repo root) in CI, where there is no live
-# ~/.claude install. Locally they default to the real Claude config so the
+# Both paths are env-overridable; they default to the real Claude config so the
 # wiring checks validate your actual setup.
 HOOKS_DIR = Path(os.environ.get("HOOKS_DIR", str(Path.home() / ".claude" / "hooks")))
 SETTINGS_PATH = Path(
@@ -185,12 +183,7 @@ KNOWN_LIBRARIES: set[str] = {
 # Real hooks that exist on disk but are intentionally NOT wired yet: wiring is an
 # opt-in decision the user makes per hook. Listed here so orphan detection knows
 # they are known, without asserting they must be wired (unlike CANONICAL_HOOKS).
-PENDING_HOOKS: dict[str, str] = {
-    "block_unresolved_findings.py": (
-        "Inline-finding commit gate (Strategy C generalization). Wire as "
-        "PreToolUse/Bash once a detector opts into blocking=True findings."
-    ),
-}
+PENDING_HOOKS: dict[str, str] = {}
 
 
 def load_settings() -> dict:

@@ -8,8 +8,8 @@ import os
 import sys
 import time
 
-# Honor HOOKS_DIR (set in CI to the vendored hooks/) so this import resolves
-# without a live ~/.claude install; default to the real Claude hooks locally.
+# HOOKS_DIR points the import at another hooks dir; defaults to the live
+# ~/.claude/hooks, which is what this suite tests.
 sys.path.insert(0, os.environ.get("HOOKS_DIR", os.path.expanduser("~/.claude/hooks")))
 from hook_inject import (
     ensure_state_dir,

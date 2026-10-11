@@ -4,9 +4,9 @@ Not an event-wired hook: project_health_check.py offers it, the model runs it
 on user acceptance. Contract under test: creates only what is missing, never
 overwrites, idempotent, and .gitignore is append-only.
 
-Module-level skipif mirrors test_block_unresolved_findings.py: the suite runs
-against the live ~/.claude/hooks (HOOKS_DIR), so these tests sleep until
-install.sh ships the script, then wake automatically.
+Module-level skipif: the suite runs against the live ~/.claude/hooks
+(HOOKS_DIR), so these tests sleep until install.sh ships the script, then wake
+automatically.
 """
 
 import subprocess

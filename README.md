@@ -10,9 +10,9 @@ to test hooks so you find out *before* you rely on one. It ships:
   scanners) — see [the table below](#the-hooks). The vendored copies were
   removed 2026-08-07 after drifting from the live implementations under test
   (the harness runs hooks from `~/.claude/hooks` via `HOOKS_DIR`, so the local
-  copies were a stale edit-the-wrong-file trap); they remain in git history.
-  [`hooks/`](hooks/) now holds only the unshipped `block_unresolved_findings.py`
-  commit gate and its two helpers.
+  copies were a stale edit-the-wrong-file trap); they remain in git history,
+  as does the unshipped `block_unresolved_findings.py` commit-gate prototype
+  (removed 2026-10-10, last in `6691958`).
 - **A pytest/Hypothesis harness** (`tests/test_hooks/`) that verifies both hook
   *logic* (does the script decide correctly?) and hook *wiring* (does Claude
   Code actually fire it?).
@@ -161,7 +161,6 @@ see what still holds.
 ## What's in the repo
 
 ```
-hooks/                 # only the unshipped commit-gate trio; vendored copies removed 2026-08-07 (see git history)
 tests/test_hooks/      # pytest + Hypothesis: logic tests + wiring validation
 probes/                # standalone experiments that discovered the channel behavior above
 fixtures/              # test inputs (fake secrets, unpinned deps, injection payloads)

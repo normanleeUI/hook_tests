@@ -228,7 +228,9 @@ class TestScriptExistence:
     def test_all_wired_scripts_exist(self):
         settings = load_settings()
         for entry in extract_wired_scripts(settings):
-            script_path = Path(entry["command"].split()[-1])
+            cmd = entry["command"]
+            assert cmd, f"hook entry has no command: {entry}"
+            script_path = Path(os.path.expandvars(cmd.split()[-1]))
             assert script_path.exists(), (
                 f"Wired script missing: {script_path} "
                 f"(event={entry['event']}, matcher={entry['matcher']})"
@@ -237,7 +239,9 @@ class TestScriptExistence:
     def test_all_wired_scripts_readable(self):
         settings = load_settings()
         for entry in extract_wired_scripts(settings):
-            script_path = Path(entry["command"].split()[-1])
+            cmd = entry["command"]
+            assert cmd, f"hook entry has no command: {entry}"
+            script_path = Path(os.path.expandvars(cmd.split()[-1]))
             assert os.access(script_path, os.R_OK), f"Not readable: {script_path}"
 
 

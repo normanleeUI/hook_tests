@@ -183,7 +183,11 @@ KNOWN_LIBRARIES: set[str] = {
 # Real hooks that exist on disk but are intentionally NOT wired yet: wiring is an
 # opt-in decision the user makes per hook. Listed here so orphan detection knows
 # they are known, without asserting they must be wired (unlike CANONICAL_HOOKS).
-PENDING_HOOKS: dict[str, str] = {}
+PENDING_HOOKS: dict[str, str] = {
+    # claude-config #14: move to CANONICAL_HOOKS (PreToolUse, Bash, python3)
+    # once the user wires it into settings.json.
+    "gate_new_packages.py": "awaiting settings.json PreToolUse Bash wiring (#14)",
+}
 
 
 def load_settings() -> dict:

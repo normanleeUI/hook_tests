@@ -127,7 +127,10 @@ class TestGithubFiles:
         ci = (proj / ".github" / "workflows" / "ci.yml").read_text()
         assert "uv sync --locked" in ci
         assert "pyright" in ci and "ruff" in ci and "pytest" in ci
-        assert "package-ecosystem: uv" in (proj / ".github" / "dependabot.yml").read_text()
+        dependabot = (proj / ".github" / "dependabot.yml").read_text()
+        assert "package-ecosystem: uv" in dependabot
+        # #14: 7-day cooldown so hijacked releases are pulled before a PR lands
+        assert "default-days: 7" in dependabot
 
     def test_non_uv_project_gets_no_github_files(self, tmp_path):
         proj = tmp_path / "proj"

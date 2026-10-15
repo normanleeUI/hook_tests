@@ -6,6 +6,8 @@ and requirements*.txt files (exit 2), allows exact pins and bounded ranges
 hypothesis property tests.
 """
 
+import json
+
 import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
@@ -662,3 +664,112 @@ class TestDependencyPinsDiffAware:
         }
         code, _, _ = run_hook(HOOK, payload)
         assert code == 2
+
+
+class TestNewDependencyNames:
+    """#14 slopsquatting guard: a dependency name the file on disk doesn't
+    already have gets permissionDecision "ask" (exit 0, JSON on stdout), so a
+    hallucinated or squatted name is put in front of the user before install.
+    Uses real files: the hook diffs the on-disk file against the post-edit one.
+    """
+
+    BASE = (
+        '[project]\nname = "p"\nversion = "0"\n'
+        'dependencies = [\n    "requests==2.32.3",\n]\n'
+    )
+
+    @staticmethod
+    def _ask(stdout: str) -> str:
+        """The ask reason; fails the test if the hook did not ask."""
+        out = json.loads(stdout)["hookSpecificOutput"]
+        assert out["permissionDecision"] == "ask"
+        return out["permissionDecisionReason"]
+
+    def _edit(self, path, old, new, **extra):
+        payload = {
+            "tool_input": {
+                "file_path": str(path),
+                "old_string": old,
+                "new_string": new,
+                **extra,
+            }
+        }
+        return run_hook(HOOK, payload, env={"TMPDIR": str(path.parent)})
+
+    def test_edit_adding_new_name_asks_and_logs_ask(self, tmp_path):
+        f = tmp_path / "pyproject.toml"
+        f.write_text(self.BASE)
+        code, _, stdout = self._edit(
+            f, '"requests==2.32.3",', '"requests==2.32.3",\n    "reqeusts==1.0.0",'
+        )
+        assert code == 0
+        assert "reqeusts" in self._ask(stdout)
+        assert "requests," not in self._ask(stdout)  # only the new name
+        log = (tmp_path / "hook_debug.log").read_text()
+        assert "ASK" in log
+
+    def test_edit_repinning_existing_name_is_silent(self, tmp_path):
+        f = tmp_path / "pyproject.toml"
+        f.write_text(self.BASE)
+        code, _, stdout = self._edit(f, "requests==2.32.3", "requests==2.32.4")
+        assert code == 0
+        assert stdout.strip() == ""
+
+    def test_dependency_group_addition_asks(self, tmp_path):
+        """The old line parser never looked at [dependency-groups]; `uv add
+        --dev` writes there, so a squatted dev tool must still be caught."""
+        f = tmp_path / "pyproject.toml"
+        f.write_text(self.BASE + '\n[dependency-groups]\ndev = ["pytest==8.4.2"]\n')
+        code, _, stdout = self._edit(
+            f, 'dev = ["pytest==8.4.2"]', 'dev = ["pytest==8.4.2", "pytset==1.0"]'
+        )
+        assert code == 0
+        assert "pytset" in self._ask(stdout)
+
+    def test_write_of_new_file_asks_for_every_name(self, tmp_path):
+        f = tmp_path / "pyproject.toml"
+        payload = {"tool_input": {"file_path": str(f), "content": self.BASE}}
+        code, _, stdout = run_hook(HOOK, payload, env={"TMPDIR": str(tmp_path)})
+        assert code == 0
+        assert "requests" in self._ask(stdout)
+
+    def test_unpinned_new_name_blocks_instead_of_asking(self, tmp_path):
+        """Also the regression test for the fragment-only pin check: this
+        one-line Edit has no `dependencies = [` line in new_string, and
+        before 2026-10-14 it passed with exit 0."""
+        f = tmp_path / "pyproject.toml"
+        f.write_text(self.BASE)
+        code, stderr, stdout = self._edit(
+            f, '"requests==2.32.3",', '"requests==2.32.3",\n    "httpx",'
+        )
+        assert code == 2
+        assert "httpx" in stderr
+        assert stdout.strip() == ""
+
+    def test_invalid_toml_after_edit_is_silent(self, tmp_path):
+        f = tmp_path / "pyproject.toml"
+        f.write_text(self.BASE)
+        code, _, stdout = self._edit(f, "]\n", '"newpkg==1.0"\n')
+        assert code == 0
+        assert stdout.strip() == ""
+
+    def test_name_normalisation_matches_existing_spelling(self, tmp_path):
+        f = tmp_path / "pyproject.toml"
+        f.write_text(self.BASE.replace("requests==2.32.3", "foo-bar==1.0"))
+        code, _, stdout = self._edit(f, "foo-bar==1.0", "Foo_Bar==1.1")
+        assert code == 0
+        assert stdout.strip() == ""
+
+    def test_replace_all_is_honoured(self, tmp_path):
+        f = tmp_path / "requirements.txt"
+        f.write_text("alpha==1.0\nbeta==1.0\n")
+        code, _, stdout = self._edit(f, "==1.0", "==1.0\ngamma==2.0", replace_all=True)
+        assert code == 0
+        assert "gamma" in self._ask(stdout)
+
+    def test_requirements_option_lines_are_not_names(self, tmp_path):
+        f = tmp_path / "requirements.txt"
+        f.write_text("alpha==1.0\n")
+        code, _, stdout = self._edit(f, "alpha==1.0", "-r base.txt\nalpha==1.0")
+        assert code == 0
+        assert stdout.strip() == ""

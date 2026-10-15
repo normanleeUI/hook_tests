@@ -190,3 +190,56 @@ def test_debug_log_decision_line_and_dated_timestamp(fake_home):
         assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}  ", line), (
             f"undated timestamp: {line!r}"
         )
+
+
+# ── Semgrep ruleset staleness → systemMessage (2026-10-14) ─────────────────
+# The refresh is a user-run networked step, so the warning must render on the
+# user's screen (SessionStart `systemMessage`), not sit in model-only stdout.
+# Claude Code parses stdout as JSON only when all of it is JSON, so drift text
+# must move into `additionalContext` whenever the warning fires.
+
+
+def _stale_ruleset(repo: Path) -> None:
+    old = datetime.date.today() - datetime.timedelta(days=91)
+    (repo / "semgrep_rules/RULESET_STAMP").write_text(f"date: {old.isoformat()}\n")
+
+
+def test_stale_ruleset_in_sync_is_system_message_only(fake_home):
+    import json
+
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    _stale_ruleset(repo)
+    payload = json.loads(run_hook(home, repo))
+    assert "91 days old" in payload["systemMessage"]
+    assert "refresh.sh" in payload["systemMessage"]
+    assert "additionalContext" not in payload
+
+
+def test_stale_ruleset_with_drift_keeps_drift_in_additional_context(fake_home):
+    import json
+
+    home, repo = fake_home
+    _stale_ruleset(repo)
+    payload = json.loads(run_hook(home, repo))
+    assert "days old" in payload["systemMessage"]
+    assert "2 unsynced change(s)" in payload["additionalContext"]
+
+
+def test_missing_ruleset_stamp_is_system_message(fake_home):
+    import json
+
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    (repo / "semgrep_rules/RULESET_STAMP").unlink()
+    payload = json.loads(run_hook(home, repo))
+    assert "missing" in payload["systemMessage"]
+
+
+def test_ruleset_at_90_days_is_silent(fake_home):
+    """Boundary: the warning is strictly > 90 days."""
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    exactly = datetime.date.today() - datetime.timedelta(days=90)
+    (repo / "semgrep_rules/RULESET_STAMP").write_text(f"date: {exactly.isoformat()}\n")
+    assert run_hook(home, repo) == ""

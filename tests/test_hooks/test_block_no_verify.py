@@ -112,8 +112,9 @@ class TestBlockPrecommitNoBlockKnob:
 
 
 class TestPhase3EscapeHatches:
-    """Phase 3: the pre-commit is the only secret layer, so the remaining
-    documented ways a session could switch it off are blocked too."""
+    """Phase 3: a `-n` on any chained commit is blocked. Its core.hooksPath and
+    PRECOMMIT_LEGS= blocks were reversed on 2026-10-17 (claude-config ledger
+    "2026-10-17 — value audit"); the allowed list below pins that."""
 
     def test_long_commands_stay_fast(self) -> None:
         """The hook runs on every Bash command, and auto-mode edits go through
@@ -149,56 +150,6 @@ class TestPhase3EscapeHatches:
     @pytest.mark.parametrize(
         "cmd",
         [
-            "git -c core.hooksPath=/dev/null commit -m x",
-            "git -c core.hookspath=/dev/null commit -m x",
-            "git config core.hooksPath /dev/null",
-            "git config --global core.hooksPath /tmp/x",
-            "git -C repo config core.hooksPath .husky",  # global options before config
-            "git config set core.hooksPath /dev/null",  # git 2.46+ subcommand form
-            "git \\\n  config core.hooksPath /dev/null",  # backslash-newline continues
-        ],
-    )
-    def test_hookspath_override_blocks(self, cmd: str) -> None:
-        """AC-NV-02."""
-        code, stderr, _ = run_hook(HOOK, _payload(cmd))
-        assert code == 2
-        assert "core.hooksPath" in stderr
-
-    @pytest.mark.parametrize(
-        "cmd",
-        [
-            "git config --global --unset core.hooksPath",
-            "git config --global --unset-all core.hooksPath",
-            "git config --unset-all --system core.hooksPath",
-            "git config unset --global core.hooksPath",  # git 2.46+ subcommand form
-        ],
-    )
-    def test_global_unset_blocks(self, cmd: str) -> None:
-        """Unsetting the GLOBAL key switches the global pre-commit off as surely
-        as pointing it at /dev/null. The pre-commit framework's own hint
-        (`git config --unset-all core.hooksPath`) leads a session here: run
-        locally it is a no-op, so the next try adds --global."""
-        code, stderr, _ = run_hook(HOOK, _payload(cmd))
-        assert code == 2
-        assert "pre-commit install" in stderr, "the message names the usual trigger"
-
-    @pytest.mark.parametrize(
-        "cmd",
-        [
-            "PRECOMMIT_LEGS= git commit -m x",
-            "PRECOMMIT_LEGS=ruff git commit -m x",
-            "export PRECOMMIT_LEGS=",
-        ],
-    )
-    def test_precommit_legs_assignment_blocks(self, cmd: str) -> None:
-        """AC-NV-03."""
-        code, stderr, _ = run_hook(HOOK, _payload(cmd))
-        assert code == 2
-        assert "PRECOMMIT_LEGS" in stderr
-
-    @pytest.mark.parametrize(
-        "cmd",
-        [
             "git config --get core.hooksPath",
             "git config --get core.hooksPath && echo ok",
             "git config --get core.hooksPath --default none",  # a flag is not a value
@@ -213,10 +164,17 @@ class TestPhase3EscapeHatches:
             "git config --global --unset user.name && git config --get core.hooksPath",
             'echo "$PRECOMMIT_LEGS"',
             "git commit -m a && sort -n f",  # regression guard: allowed before too
+            # Reversed 2026-10-17: scratch-repo fixtures and text that names the key.
+            "git -c core.hooksPath=/dev/null commit -qm init",
+            "git config core.hooksPath /dev/null",
+            "PRECOMMIT_LEGS=ruff git commit -m x",
+            "cat > tests/test_x.py <<'EOF'\n"
+            + "run(['git', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'x'])\n"
+            + "EOF",
         ],
     )
     def test_lookalikes_allowed(self, cmd: str) -> None:
-        """AC-NV-04."""
+        """AC-NV-04, plus the forms the 2026-10-17 reversal allows."""
         code, stderr, _ = run_hook(HOOK, _payload(cmd))
         assert code == 0
         assert stderr.strip() == ""

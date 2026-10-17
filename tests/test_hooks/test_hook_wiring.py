@@ -144,16 +144,13 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "WebFetch|mcp__.*",
         "if_condition": None,
     },
-    # Stop
-    "ruff_lint.sh": {
-        "event": "Stop",
-        "interpreter": "bash",
-        "matcher": None,
-        "if_condition": None,
-    },
 }
 
 DEPRECATED_HOOKS: dict[str, str] = {
+    "ruff_lint.sh": (
+        "Deleted 2026-10-16 (phase 2): auto-fixed WIP at every Stop (EP10); "
+        "the pre-commit ruff leg blocks lint on added lines"
+    ),
     "mypy_check.sh": "Unwired 2026-06-13: pyright preferred; removed from repo 2026-10-02",
     "log_new_dependency.py": "Unwired 2026-06-13: redundant with pip_audit_check; removed from repo 2026-10-02",
     "r_style_check.sh": "Unwired 2026-06-13: R not actively used; removed from repo 2026-10-02",

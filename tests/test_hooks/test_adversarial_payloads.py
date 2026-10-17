@@ -20,13 +20,8 @@ from hypothesis import strategies as st
 from tests.test_hooks.hook_runner import HOOKS_DIR, run_bash_hook, run_hook
 from tests.test_hooks.test_hook_wiring import CANONICAL_HOOKS
 
-# Stop hooks that read git state, not stdin JSON
-STDIN_INDEPENDENT = {"ruff_lint.sh"}
-
 ALL_HOOKS: dict[str, str] = {
-    name: cfg["interpreter"]
-    for name, cfg in CANONICAL_HOOKS.items()
-    if name not in STDIN_INDEPENDENT
+    name: cfg["interpreter"] for name, cfg in CANONICAL_HOOKS.items()
 }
 
 ADVERSARIAL_PAYLOADS: list = [

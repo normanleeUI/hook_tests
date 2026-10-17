@@ -66,7 +66,6 @@ SHELL_HOOKS=(
     git_pull_on_start.sh
     check_dep_freshness.sh
     ruff_format.sh
-    ruff_lint.sh
 )
 
 printf "\n  ${BOLD}Python hooks${RESET}\n"
@@ -130,13 +129,12 @@ with open(settings_path) as f:
 hooks = data.get("hooks", {})
 
 # Expected hook groups: (event, matcher_or_None)
-# matcher=None means the group has no matcher (SessionStart, Stop).
+# matcher=None means the group has no matcher (SessionStart).
 expected_groups = [
     ("SessionStart", None),
     ("PostToolUse", "Edit|Write"),
     ("PostToolUse", "Bash"),
     ("PostToolUse", "WebFetch|mcp__.*"),
-    ("Stop", None),
     ("PreToolUse", "Read"),
     ("PreToolUse", "Bash"),
     ("PreToolUse", "Edit|Write"),
@@ -187,7 +185,9 @@ PYEOF
                 # tests/test_hooks/test_hook_wiring.py. Down one after the
                 # 2026-08 pre-commit migration retired the batch_checks.sh Stop
                 # hook (pyright/bandit/semgrep/docstrings now run in the git
-                # pre-commit hook; seeds leg dropped system-wide).
+                # pre-commit hook; seeds leg dropped system-wide). 18 after
+                # that; 17 again from 2026-10-16, when the last Stop hook (a
+                # session-end lint auto-fix) was deleted.
                 if [[ "$total" -eq 17 ]]; then
                     pass "Total hooks wired: $total (expected 17)"
                 else

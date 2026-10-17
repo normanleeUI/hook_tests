@@ -1,5 +1,5 @@
-"""Gate-logic tests for the wired shell hooks (ruff_format, ruff_lint,
-git_pull_on_start, check_dep_freshness).
+"""Gate-logic tests for the wired shell hooks (ruff_format, git_pull_on_start,
+check_dep_freshness).
 
 The wired shell hooks are thin wrappers that parse JSON, extract file paths,
 filter by extension/location, and delegate to external tools (ruff, git). We
@@ -192,167 +192,6 @@ class TestRuffFormat:
 
         log = _read_log(log_file)
         assert "uvx ruff format" in log
-
-
-# ── ruff_lint.sh ────────────────────────────────────────────────────────────
-
-
-class TestRuffLint:
-    """ruff_lint.sh: lint-fix changed .py files at session end."""
-
-    def test_runs_on_changed_files(self, fake_tool_env, tmp_path):
-        """When there are changed .py files, .venv/bin/ruff check --fix should run."""
-        env, log_file = fake_tool_env
-        _init_git_repo(tmp_path)
-
-        # ruff_lint.sh calls .venv/bin/ruff directly, not uvx
-        venv_bin = tmp_path / ".venv" / "bin"
-        venv_bin.mkdir(parents=True)
-        ruff_stub = venv_bin / "ruff"
-        ruff_stub.write_text(
-            f'#!/usr/bin/env bash\necho "ruff $@" >> {log_file}\nexit 0\n'
-        )
-        ruff_stub.chmod(ruff_stub.stat().st_mode | stat.S_IEXEC)
-
-        # Create and commit a .py file, then modify it so it shows in git diff
-        py_file = tmp_path / "app.py"
-        py_file.write_text("x = 1\n")
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "add", "app.py"],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "commit", "-m", "add app"],
-            check=True,
-            capture_output=True,
-        )
-        py_file.write_text("x = 2\n")  # Now it's a modified file
-
-        # ruff_lint.sh takes no meaningful JSON input; it reads git state
-        run_bash_hook("ruff_lint.sh", {}, env=env, cwd=str(tmp_path))
-
-        log = _read_log(log_file)
-        # T20 (flake8-print) added 2026-08-03 to close the print-vs-logging gap
-        assert "ruff check --extend-select T20 --fix" in log
-        assert "app.py" in log, "ruff should have been passed the changed file"
-
-    def test_noops_without_git(self, fake_tool_env, tmp_path):
-        """Outside a git repo, the hook should silently exit."""
-        env, log_file = fake_tool_env
-
-        run_bash_hook("ruff_lint.sh", {}, env=env, cwd=str(tmp_path))
-
-        log = _read_log(log_file)
-        assert log == "", "ruff_lint should no-op outside a git repo"
-
-    def _setup_repo_with_real_ruff(self, tmp_path):
-        """Init a repo whose .venv/bin/ruff is the REAL ruff, not a stub.
-
-        E722 blocking depends on real ruff output (file:line + rule code),
-        so a logging stub would only test our own assumptions.
-        """
-        _init_git_repo(tmp_path)
-        real_ruff = shutil.which("ruff")
-        if real_ruff is None:
-            pytest.skip("real ruff not found on PATH")
-        venv_bin = tmp_path / ".venv" / "bin"
-        venv_bin.mkdir(parents=True)
-        (venv_bin / "ruff").symlink_to(real_ruff)
-
-    def _commit_then_rewrite(self, tmp_path, content):
-        """Commit a clean app.py, then rewrite it so it shows in git diff."""
-        py_file = tmp_path / "app.py"
-        py_file.write_text("x = 1\n")
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "add", "app.py"],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "commit", "-m", "add app"],
-            check=True,
-            capture_output=True,
-        )
-        py_file.write_text(content)
-
-    def test_bare_except_no_longer_blocks_at_stop(self, fake_tool_env, tmp_path):
-        """Negative test (test_quality #6): the Stop hook is auto-fix only since
-        2026-10-02. A remaining E722 is REPORTED by ruff's own output but never
-        exits 2 — the blocking, diff-scoped E722 check lives in the pre-commit
-        ruff leg (test_precommit_hook.TestRuffLeg)."""
-        env, _ = fake_tool_env
-        self._setup_repo_with_real_ruff(tmp_path)
-        self._commit_then_rewrite(tmp_path, "try:\n    x = 1\nexcept:\n    pass\n")
-
-        rc, stderr, stdout = run_bash_hook(
-            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
-        )
-
-        assert rc == 0, f"Stop hook must not block, got rc={rc} (stderr: {stderr})"
-        assert "BLOCKED" not in stderr
-        assert "ALLOW  lint-fixed n=1" in _debug_log(tmp_path)
-
-    def _collab_repo_with_dirty_py(self, root, log_file):
-        """Init a repo at *root* whose .venv/bin/ruff is a logging stub, with
-        one committed-then-modified app.py so ruff_lint has work to do."""
-        root.mkdir(parents=True)
-        _init_git_repo(root)
-        venv_bin = root / ".venv" / "bin"
-        venv_bin.mkdir(parents=True)
-        stub = venv_bin / "ruff"
-        stub.write_text(f'#!/usr/bin/env bash\necho "ruff $@" >> {log_file}\nexit 0\n')
-        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
-        py_file = root / "app.py"
-        py_file.write_text("x = 1\n")
-        subprocess.run(["git", "-C", str(root), "add", "app.py"], check=True, capture_output=True)
-        subprocess.run(
-            ["git", "-C", str(root), "commit", "-m", "add app"], check=True, capture_output=True
-        )
-        py_file.write_text("x = 2\n")
-
-    def test_skips_collab_repo(self, fake_tool_env, tmp_path):
-        """Collab gate (2026-10-02, mirrors ruff_format.sh): a repo under a
-        literal /collab/ path component is never lint-fixed — the Stop hook
-        would otherwise rewrite lines the session did not touch in a team file."""
-        env, log_file = fake_tool_env
-        repo = tmp_path / "collab" / "team_project"
-        self._collab_repo_with_dirty_py(repo, log_file)
-
-        rc, stderr, _ = run_bash_hook(
-            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(repo)
-        )
-
-        assert rc == 0
-        assert _read_log(log_file) == "", "ruff must not run on a collab repo"
-        assert "SKIP   collab project" in _debug_log(tmp_path)
-
-    def test_collab_substring_dir_still_linted(self, fake_tool_env, tmp_path):
-        """Only a literal /collab/ component gates; collaboration_tools/ is linted."""
-        env, log_file = fake_tool_env
-        repo = tmp_path / "collaboration_tools" / "proj"
-        self._collab_repo_with_dirty_py(repo, log_file)
-
-        rc, _, _ = run_bash_hook(
-            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(repo)
-        )
-
-        assert rc == 0
-        assert "ruff check --extend-select T20 --fix" in _read_log(log_file)
-
-    def test_clean_file_not_blocked(self, fake_tool_env, tmp_path):
-        """A changed file with no E722 violation exits 0 (no false block)."""
-        env, _ = fake_tool_env
-        self._setup_repo_with_real_ruff(tmp_path)
-        self._commit_then_rewrite(
-            tmp_path, "try:\n    x = 1\nexcept ValueError:\n    pass\n"
-        )
-
-        rc, stderr, stdout = run_bash_hook(
-            "ruff_lint.sh", {}, env=env, cwd=str(tmp_path)
-        )
-
-        assert rc == 0, f"clean file should not block (stderr: {stderr})"
 
 
 # ── git_pull_on_start.sh ───────────────────────────────────────────────────
@@ -672,51 +511,9 @@ def _debug_log(tmp_path) -> str:
 
 
 class TestDebugLogDecisions:
-    """Every exit path of the three SessionStart/Stop bash hooks now logs a
-    decision line (ledger 2026-08-18: 11 fires, 0 decisions), and timestamps
-    carry a date so multi-day logs stay readable."""
-
-    def test_ruff_lint_not_a_repo(self, fake_tool_env, tmp_path):
-        env, _ = fake_tool_env
-        run_bash_hook(
-            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
-        )
-        log = _debug_log(tmp_path)
-        assert "ruff_lint" in log and "ALLOW  not-a-repo" in log
-
-    def test_ruff_lint_no_py_files(self, fake_tool_env, tmp_path):
-        env, _ = fake_tool_env
-        _init_git_repo(tmp_path)
-        run_bash_hook(
-            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
-        )
-        assert "ALLOW  no-py-files" in _debug_log(tmp_path)
-
-    def test_ruff_lint_lint_fixed(self, fake_tool_env, tmp_path):
-        env, log_file = fake_tool_env
-        _init_git_repo(tmp_path)
-        venv_bin = tmp_path / ".venv" / "bin"
-        venv_bin.mkdir(parents=True)
-        stub = venv_bin / "ruff"
-        stub.write_text(f'#!/usr/bin/env bash\necho "ruff $@" >> {log_file}\nexit 0\n')
-        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
-        py_file = tmp_path / "app.py"
-        py_file.write_text("x = 1\n")
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "add", "app.py"],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "commit", "-m", "add app"],
-            check=True,
-            capture_output=True,
-        )
-        py_file.write_text("x = 2\n")
-        run_bash_hook(
-            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
-        )
-        assert "ALLOW  lint-fixed n=1" in _debug_log(tmp_path)
+    """Every exit path of the two SessionStart bash hooks (git_pull_on_start,
+    check_dep_freshness) logs a decision line (ledger 2026-08-18: 11 fires,
+    0 decisions), and timestamps carry a date so multi-day logs stay readable."""
 
     def test_git_pull_not_a_repo(self, fake_tool_env, tmp_path):
         env, _ = fake_tool_env
@@ -793,7 +590,10 @@ class TestDebugLogDecisions:
         """Every debug-log line now carries a YYYY-MM-DD date prefix."""
         env, _ = fake_tool_env
         run_bash_hook(
-            "ruff_lint.sh", {}, env={**env, "TMPDIR": str(tmp_path)}, cwd=str(tmp_path)
+            "check_dep_freshness.sh",
+            {},
+            env={**env, "TMPDIR": str(tmp_path)},
+            cwd=str(tmp_path),
         )
         lines = _debug_log(tmp_path).splitlines()
         assert lines, "hook should have written FIRED + decision lines"

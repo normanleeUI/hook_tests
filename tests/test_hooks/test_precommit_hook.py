@@ -51,6 +51,7 @@ def _commit(
     msg: str,
     legs: str | None = None,
     extra_env: dict[str, str] | None = None,
+    args: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess:
     env = {**os.environ, "PRECOMMIT_LOG": str(ledger), **(extra_env or {})}
     if legs is None:
@@ -60,7 +61,7 @@ def _commit(
     else:
         env["PRECOMMIT_LEGS"] = legs
     return subprocess.run(
-        ["git", "-C", str(repo), "commit", "-m", msg],
+        ["git", "-C", str(repo), "commit", "-m", msg, *args],
         env=env,
         capture_output=True,
         text=True,
@@ -1477,3 +1478,191 @@ class TestPipAuditLeg:
         assert result.returncode == 0
         assert "NOT audited" not in result.stdout + result.stderr
         assert not fake_uvx.log.exists()
+
+
+# ── secret leg (phase 3 step 2) ────────────────────────────────────────────
+# Keys are assembled from parts so THIS file never holds a literal key: the
+# live hooks scan every commit made in this repo.
+AWS_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
+SK_PROJ_KEY = "sk-" + "proj-" + "Xy7Kp2Qw9Lm4Nb6Vc1Zt8Rd3" * 2
+
+
+class TestSecretLeg:
+    def _seed(self, repo: Path, ledger: Path, name: str, content: str) -> None:
+        _stage(repo, name, content)
+        assert _commit(repo, ledger, "seed", legs="").returncode == 0
+
+    def _assert_blocked(self, repo: Path, before: int, result, where: str) -> None:
+        assert result.returncode == 1, result.stderr
+        assert _head_count(repo) == before
+        assert BLOCK_HEADER in result.stderr
+        assert where in result.stderr
+
+    def test_key_in_non_py_file_blocks(self, hook_repo) -> None:
+        """AC-SEC-01: a key staged just before the commit, in a non-.py file."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "config.yaml", f"name: demo\naws_key: {AWS_KEY}\n")
+        result = _commit(repo, ledger, "add config", legs="secret")
+        self._assert_blocked(repo, before, result, "config.yaml:2")
+        assert "AWS access key ID" in result.stderr
+
+    def test_commit_all_blocks(self, hook_repo) -> None:
+        """AC-SEC-02: `commit -a` stages the key itself, after any PreToolUse
+        hook could have looked."""
+        repo, ledger = hook_repo
+        self._seed(repo, ledger, "notes.txt", "hello\n")
+        before = _head_count(repo)
+        (repo / "notes.txt").write_text(f"hello\nkey = {AWS_KEY}\n")
+        result = _commit(repo, ledger, "edit", legs="secret", args=("-a",))
+        self._assert_blocked(repo, before, result, "notes.txt:2")
+
+    def test_commit_pathspec_blocks(self, hook_repo) -> None:
+        """AC-SEC-03: `commit -m x <path>` commits through a temporary index."""
+        repo, ledger = hook_repo
+        self._seed(repo, ledger, "notes.txt", "hello\n")
+        before = _head_count(repo)
+        (repo / "notes.txt").write_text(f"key = {AWS_KEY}\nhello\n")
+        result = _commit(repo, ledger, "edit", legs="secret", args=("notes.txt",))
+        self._assert_blocked(repo, before, result, "notes.txt:1")
+
+    def test_latin1_file_blocks_without_traceback(self, hook_repo) -> None:
+        """AC-SEC-04."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        (repo / "legacy.cfg").write_bytes(b"caf\xe9 = 1\nkey = " + AWS_KEY.encode() + b"\n")
+        _run(repo, "add", "legacy.cfg")
+        result = _commit(repo, ledger, "latin1", legs="secret")
+        self._assert_blocked(repo, before, result, "legacy.cfg:2")
+        assert "Traceback" not in result.stdout + result.stderr
+
+    def test_nul_byte_file_blocks(self, hook_repo) -> None:
+        """AC-SEC-05: without --text git would print 'Binary files differ'."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        (repo / "blob.bin").write_bytes(b"\x00\x01head\n" + AWS_KEY.encode() + b"\n")
+        _run(repo, "add", "blob.bin")
+        result = _commit(repo, ledger, "binary", legs="secret")
+        self._assert_blocked(repo, before, result, "blob.bin:2")
+
+    def test_plusplus_content_line_blocks(self, hook_repo) -> None:
+        """AC-SEC-06: a content line `++<key>` renders as `+++<key>` in the
+        diff, which a prefix-based header check would skip."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "notes.txt", f"++{AWS_KEY}\n")
+        result = _commit(repo, ledger, "plusplus", legs="secret")
+        self._assert_blocked(repo, before, result, "notes.txt:1")
+
+    def test_sk_proj_key_blocks(self, hook_repo) -> None:
+        """AC-SEC-07, commit level."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "app.toml", f'openai = "{SK_PROJ_KEY}"\n')
+        result = _commit(repo, ledger, "proj key", legs="secret")
+        self._assert_blocked(repo, before, result, "app.toml:1")
+        assert "OpenAI API key" in result.stderr
+
+    def test_noprefix_config_still_names_file(self, hook_repo) -> None:
+        """AC-SEC-13: diff.noprefix=true would turn `+++ b/x` into `+++ x`;
+        color.diff=always would wrap every line in escape codes."""
+        repo, ledger = hook_repo
+        _run(repo, "config", "diff.noprefix", "true")
+        _run(repo, "config", "color.diff", "always")
+        before = _head_count(repo)
+        _stage(repo, "config.yaml", f"aws_key: {AWS_KEY}\n")
+        result = _commit(repo, ledger, "noprefix", legs="secret")
+        self._assert_blocked(repo, before, result, "config.yaml:1")
+
+    def test_non_ascii_name_is_named_unquoted(self, hook_repo) -> None:
+        """Under default git config a non-ASCII path is C-quoted in the
+        `+++` header ("b/caf\\303\\251.yaml"), so the finding would name no file."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "café.yaml", f"aws_key: {AWS_KEY}\n")
+        result = _commit(repo, ledger, "accent", legs="secret")
+        self._assert_blocked(repo, before, result, "café.yaml:1")
+
+    def test_unchanged_key_line_does_not_block(self, hook_repo) -> None:
+        """AC-SEC-08: only added lines count, so a teammate's existing key
+        never blocks an unrelated edit. Regression guard against over-blocking:
+        passes before the leg exists too."""
+        repo, ledger = hook_repo
+        self._seed(repo, ledger, "notes.txt", f"a\n{AWS_KEY}\nb\n")
+        before = _head_count(repo)
+        _stage(repo, "notes.txt", f"a2\n{AWS_KEY}\nb\n")
+        result = _commit(repo, ledger, "edit a", legs="secret")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+
+    def test_deleting_key_line_lands(self, hook_repo) -> None:
+        """AC-SEC-09. Regression guard: passes before the leg exists too."""
+        repo, ledger = hook_repo
+        self._seed(repo, ledger, "notes.txt", f"a\n{AWS_KEY}\n")
+        before = _head_count(repo)
+        _stage(repo, "notes.txt", "a\n")
+        result = _commit(repo, ledger, "drop key", legs="secret")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+
+    def test_disk_word_does_not_block(self, hook_repo) -> None:
+        """AC-SEC-10. Regression guard: passes before the leg exists too."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "notes.md", "see disk-usage-monitoring-for-servers\n")
+        result = _commit(repo, ledger, "notes", legs="secret")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+
+    def test_full_key_never_printed_or_logged(self, hook_repo) -> None:
+        """AC-SEC-11: at most the first 8 characters, anywhere."""
+        repo, ledger = hook_repo
+        _stage(repo, "config.yaml", f"aws_key: {AWS_KEY}\n")
+        result = _commit(repo, ledger, "add config", legs="secret")
+        text = ledger.read_text() if ledger.exists() else ""
+        assert "AKIAABCD" in result.stderr
+        assert "AKIAABCD" in text
+        for out in (result.stdout, result.stderr, text):
+            assert AWS_KEY not in out
+            assert "AKIAABCDE" not in out
+
+    def test_git_failure_logs_error_no_findings(self, monkeypatch, tmp_path) -> None:
+        """AC-SEC-12: outside a repo `git diff --cached` fails; the leg logs
+        and returns nothing instead of raising (global-hook invariant)."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert mod.secret_leg() == []
+        unit_ledger = tmp_path / "unit-ledger.log"
+        assert "error:" in (unit_ledger.read_text() if unit_ledger.exists() else "")
+
+
+class TestIterAdditions:
+    def test_tracks_paths_hunks_and_plusplus_lines(self, monkeypatch, tmp_path) -> None:
+        """Pure parser: `+++ b/` only counts in header state (a `+++` content
+        line is an addition), a spaced name's trailing tab is dropped, and
+        line numbers restart at each hunk's +start."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        diff = (
+            b"diff --git a/a b.txt b/a b.txt\n"
+            b"--- a/a b.txt\t\n"
+            b"+++ b/a b.txt\t\n"
+            b"@@ -1,0 +2,2 @@\n"
+            b"+one\n"
+            b"++++two\n"
+            b"@@ -9 +10 @@\n"
+            b"-old\n"
+            b"+new\n"
+            b"\\ No newline at end of file\n"
+            b"diff --git a/x b/x\n"
+            b"new file mode 100644\n"
+            b"--- /dev/null\n"
+            b"+++ b/x\n"
+            b"@@ -0,0 +1 @@\n"
+            b"+x1\n"
+        )
+        assert list(mod._iter_additions(diff)) == [
+            ("a b.txt", 2, b"one"),
+            ("a b.txt", 3, b"+++two"),
+            ("a b.txt", 10, b"new"),
+            ("x", 1, b"x1"),
+        ]

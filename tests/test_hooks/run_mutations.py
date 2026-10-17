@@ -34,10 +34,6 @@ HOOK_TEST_MAP: dict[str, list[str]] = {
     "block_suppressions.py": ["tests/test_hooks/test_block_suppressions.py"],
     "check_dependency_pins.py": ["tests/test_hooks/test_check_dependency_pins.py"],
     "block_glob_deny_rules.py": ["tests/test_hooks/test_block_glob_deny_rules.py"],
-    "scan_secrets_on_commit.py": [
-        "tests/test_hooks/test_scan_secrets_gate.py",
-        "tests/test_hooks/test_secret_patterns.py",
-    ],
 }
 
 

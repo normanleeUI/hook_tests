@@ -46,20 +46,13 @@ EXPECTED = [
     ("B", "2.14", "block_git_add_env", "git add .", "BLOCK"),
     ("B", "2.15", "block_git_add_env", "git add src/clean_module.py", "ALLOW"),
     ("B", "2.16", "block_git_add_env", "git status", "NOT_FIRED"),
-    # -- Group C: cross-cutting + if: filtering + scan_secrets --
+    # -- Group C: cross-cutting + if: filtering --
     ("C", "2.17a", "block_bare_pip", "pip install requests", "BLOCK"),
     ("C", "2.17b", "block_read_env", "pip install requests", "ALLOW"),
-    ("C", "2.17d", "scan_secrets_on_commit", "pip install requests", "NOT_FIRED"),
     ("C", "2.18a", "block_git_add_env", "git add .env", "BLOCK"),
     ("C", "2.18b", "block_bare_pip", "git add .env", "ALLOW"),
-    # With the realistic fixture staged (Batch 0), scan_secrets now BLOCKS the
-    # commit; the file stays staged after each block, so all three commits block.
-    ("C", "2.19a", "scan_secrets_on_commit", "git commit -m 'test'", "BLOCK"),
-    ("C", "2.20", "scan_secrets_on_commit", "git commit -m 'test wiring'", "BLOCK"),
-    ("C", "2.21", "scan_secrets_on_commit", "git status", "NOT_FIRED"),
     ("C", "2.22", "block_git_add_env", "git add .", "BLOCK"),
     ("C", "2.23", "block_git_add_env", "echo hello", "NOT_FIRED"),
-    ("C", "2.24", "scan_secrets_on_commit", "git commit -m 'secret test'", "BLOCK"),
     # block_no_verify (no if:, fires on every Bash) — blocks hook-skipping flags.
     ("C", "2.25", "block_no_verify", "git commit --no-verify -m x", "BLOCK"),
     ("C", "2.26", "block_no_verify", "git commit -n -m x", "BLOCK"),

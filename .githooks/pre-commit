@@ -12,15 +12,15 @@ Code hook stays as the early/UX block.
 SELF-CONTAINED by design — no imports from ~/.claude/hooks, so the repo stays
 reproducible for anyone who clones it and runs scripts/install_hooks.sh.
 
-PATTERNS below are copied VERBATIM from ~/.claude/hooks/scan_secrets_on_commit.py
-(source of truth). If that dict changes, re-sync this copy.
+PATTERNS below are a copy; the source of truth is _SECRET_PATTERNS in
+claude-config/githooks/pre-commit (this copy predates its phase-3 additions).
 """
 
 import re
 import subprocess
 import sys
 
-# --- copied verbatim from ~/.claude/hooks/scan_secrets_on_commit.py ---
+# --- copied from claude-config/githooks/pre-commit (_SECRET_PATTERNS) ---
 PATTERNS: dict[str, str] = {
     "Anthropic API key": r"sk-ant-[A-Za-z0-9_-]{20,}",
     "OpenAI API key": r"sk-(?!ant-)[A-Za-z0-9]{20,}",

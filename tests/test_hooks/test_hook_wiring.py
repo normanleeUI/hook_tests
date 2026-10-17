@@ -80,12 +80,6 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Bash",
         "if_condition": None,
     },
-    "scan_secrets_on_commit.py": {
-        "event": "PreToolUse",
-        "interpreter": "python3",
-        "matcher": "Bash",
-        "if_condition": None,
-    },
     "block_git_add_env.py": {
         "event": "PreToolUse",
         "interpreter": "python3",
@@ -139,6 +133,10 @@ DEPRECATED_HOOKS: dict[str, str] = {
     "pip_audit_check.py": "Deleted 2026-10-16 (phase 3): replaced by the pre-commit pip-audit leg",
     "pip_audit_guard.py": "Deleted 2026-10-16 (phase 3): replaced by the pre-commit pip-audit leg",
     "hook_inject.py": "Deleted 2026-10-16 (phase 3): state-dir helper; its last users were the pip-audit hooks",
+    "scan_secrets_on_commit.py": (
+        "Deleted 2026-10-16 (phase 3): read the index before the command ran; "
+        "the pre-commit secret leg scans what is actually committed"
+    ),
     "ruff_lint.sh": (
         "Deleted 2026-10-16 (phase 2): auto-fixed WIP at every Stop (EP10); "
         "the pre-commit ruff leg blocks lint on added lines"
@@ -160,8 +158,8 @@ DEPRECATED_HOOKS: dict[str, str] = {
     "check_docstrings.py": "Retired 2026-08-13: superseded by git pre-commit hook (githooks/pre-commit)",
     "check_random_seeds.py": "Retired 2026-08-13: superseded by git pre-commit hook (githooks/pre-commit)",
     "test_scan_secrets_on_commit.py": (
-        "Removed 2026-08-25: redundant standalone self-check, superseded by "
-        "tests/test_hooks/test_scan_secrets_gate.py; live copy awaits user rm. "
+        "Removed 2026-08-25: redundant standalone self-check; the hook it "
+        "checked is gone too (phase 3); live copy awaits user rm. "
         "NOTE: this entry suppresses orphan detection for the file, so a "
         "silent re-add on disk will NOT be flagged; only re-wiring in "
         "settings.json would be"

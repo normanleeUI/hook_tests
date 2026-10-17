@@ -52,7 +52,6 @@ PYTHON_HOOKS=(
     project_health_check.py
     block_read_env.py
     block_bare_pip.py
-    scan_secrets_on_commit.py
     block_git_add_env.py
     check_dependency_pins.py
     block_suppressions.py

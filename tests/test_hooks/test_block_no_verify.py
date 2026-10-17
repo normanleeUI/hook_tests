@@ -130,6 +130,8 @@ class TestPhase3EscapeHatches:
             "git -c core.hookspath=/dev/null commit -m x",
             "git config core.hooksPath /dev/null",
             "git config --global core.hooksPath /tmp/x",
+            "git -C repo config core.hooksPath .husky",  # global options before config
+            "git config set core.hooksPath /dev/null",  # git 2.46+ subcommand form
         ],
     )
     def test_hookspath_override_blocks(self, cmd: str) -> None:
@@ -158,6 +160,11 @@ class TestPhase3EscapeHatches:
             "git config --get core.hooksPath",
             "git config --get core.hooksPath && echo ok",
             "git config --get core.hooksPath --default none",  # a flag is not a value
+            "git config --get core.hooksPath 2>/dev/null",  # a redirect is not a value
+            "git config core.hooksPath 2>/dev/null",  # key with no value is a read
+            "grep -rn core.hooksPath githooks/",  # searching for the key, not git config
+            "rg -i core.hookspath docs",
+            "git grep -n core.hooksPath",
             "git config --unset core.hooksPath",
             'echo "$PRECOMMIT_LEGS"',
             "git commit -m a && sort -n f",  # regression guard: allowed before too

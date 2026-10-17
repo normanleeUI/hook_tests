@@ -146,7 +146,6 @@ class TestNoCrashOnHypothesisPayloads:
         [
             ("block_bare_pip.py", "python3"),
             ("block_read_env.py", "python3"),
-            ("block_git_add_env.py", "python3"),
             ("block_suppressions.py", "python3"),
             ("scan_prompt_injection.py", "python3"),
         ],

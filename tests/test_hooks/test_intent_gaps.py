@@ -58,20 +58,6 @@ _env_suffixes = st.sampled_from(
     ]
 )
 
-# Directory prefixes for path traversal
-_dir_prefixes = st.sampled_from(
-    [
-        "",
-        "./",
-        "../",
-        "../../",
-        "/home/user/project/",
-        "src/",
-        "config/",
-        "../config/",
-    ]
-)
-
 
 # =====================================================================
 # block_bare_pip.py — Intent: block bare pip install outside virtualenv
@@ -135,74 +121,6 @@ class TestBlockBarePipIntentGaps:
         cmd = f"\tpip install {pkg}"
         code, _, _ = run_hook(self.HOOK, bash_payload(cmd))
         assert code == 2, "pip install preceded by tab was not blocked"
-
-
-# =====================================================================
-# block_git_add_env.py — Intent: block staging .env files & bulk add
-# =====================================================================
-
-
-class TestBlockGitAddEnvIntentGaps:
-    """Hypothesis sweeps for git add variations that should trigger block_git_add_env.py."""
-
-    HOOK = "block_git_add_env.py"
-
-    @given(suffix=_env_suffixes)
-    @settings(
-        max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
-    def test_quoted_env_file(self, bash_payload, suffix):
-        """Quoted .env filenames should still be caught."""
-        env_file = f".env{suffix}"
-        cmd = f'git add "{env_file}"'
-        code, _, _ = run_hook(self.HOOK, bash_payload(cmd))
-        assert code == 2, f"git add with quoted {env_file!r} was not blocked"
-
-    @given(suffix=_env_suffixes)
-    @settings(
-        max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
-    def test_single_quoted_env_file(self, bash_payload, suffix):
-        """Single-quoted .env filenames should still be caught."""
-        env_file = f".env{suffix}"
-        cmd = f"git add '{env_file}'"
-        code, _, _ = run_hook(self.HOOK, bash_payload(cmd))
-        assert code == 2, f"git add with single-quoted {env_file!r} was not blocked"
-
-    @given(prefix=_dir_prefixes, suffix=_env_suffixes)
-    @settings(
-        max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
-    def test_env_with_directory_prefix(self, bash_payload, prefix, suffix):
-        """Directory-qualified .env paths should still be caught."""
-        env_file = f"{prefix}.env{suffix}"
-        cmd = f"git add {env_file}"
-        code, _, _ = run_hook(self.HOOK, bash_payload(cmd))
-        assert code == 2, f"git add {env_file!r} was not blocked"
-
-    @given(ws=_ws)
-    @settings(
-        max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
-    def test_bulk_add_dot_with_whitespace(self, bash_payload, ws):
-        """git add with whitespace variants before '.' should still block."""
-        cmd = f"git{ws}add{ws}."
-        code, _, _ = run_hook(self.HOOK, bash_payload(cmd))
-        assert code == 2, f"git add . with whitespace {ws!r} was not blocked"
-
-    @given(
-        sep=st.sampled_from(["&&", "||", ";"]),
-        suffix=_env_suffixes,
-    )
-    @settings(
-        max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
-    def test_compound_git_add_env(self, bash_payload, sep, suffix):
-        """git add .env after compound operator should be caught."""
-        env_file = f".env{suffix}"
-        cmd = f"echo done {sep} git add {env_file}"
-        code, _, _ = run_hook(self.HOOK, bash_payload(cmd))
-        assert code == 2, f"git add {env_file} after {sep!r} was not blocked"
 
 
 # =====================================================================

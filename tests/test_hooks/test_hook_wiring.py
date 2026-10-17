@@ -80,12 +80,6 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Bash",
         "if_condition": None,
     },
-    "block_git_add_env.py": {
-        "event": "PreToolUse",
-        "interpreter": "python3",
-        "matcher": "Bash",
-        "if_condition": None,
-    },
     # #14 slopsquatting guard; asks (not blocks), watched live 2026-10-14
     "gate_new_packages.py": {
         "event": "PreToolUse",
@@ -136,6 +130,10 @@ DEPRECATED_HOOKS: dict[str, str] = {
     "scan_secrets_on_commit.py": (
         "Deleted 2026-10-16 (phase 3): read the index before the command ran; "
         "the pre-commit secret leg scans what is actually committed"
+    ),
+    "block_git_add_env.py": (
+        "Deleted 2026-10-16 (phase 3): matched command text, so it missed "
+        "commit -a and force-adds; the pre-commit checks staged names"
     ),
     "ruff_lint.sh": (
         "Deleted 2026-10-16 (phase 2): auto-fixed WIP at every Stop (EP10); "

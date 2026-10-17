@@ -5,6 +5,8 @@
 so it must be caught BEFORE git runs — in this Claude Code PreToolUse hook.
 """
 
+import pytest
+
 from tests.test_hooks.hook_runner import run_hook
 
 HOOK = "block_no_verify.py"
@@ -24,7 +26,7 @@ class TestBlockNoVerify:
         code, stderr, _ = run_hook(HOOK, _payload("git commit -m x"))
         assert code == 0
         assert stderr.strip() == ""  # silent on pass — no alert-fatigue noise
-        
+
     def test_git_C_commit_no_verify_is_blocked(self) -> None:
         """The bypass class: --no-verify anywhere in the command is caught,
         including the `git -C .` form that dodges prefix matchers."""
@@ -73,12 +75,16 @@ class TestBlockPrecommitNoBlockKnob:
     (2026-10-02)."""
 
     def test_env_prefix_form_is_blocked(self) -> None:
-        code, stderr, _ = run_hook(HOOK, _payload("PRECOMMIT_NO_BLOCK=1 git commit -m x"))
+        code, stderr, _ = run_hook(
+            HOOK, _payload("PRECOMMIT_NO_BLOCK=1 git commit -m x")
+        )
         assert code == 2
         assert "PRECOMMIT_NO_BLOCK" in stderr
 
     def test_env_command_form_is_blocked(self) -> None:
-        code, _, _ = run_hook(HOOK, _payload("env PRECOMMIT_NO_BLOCK=1 git commit -m x"))
+        code, _, _ = run_hook(
+            HOOK, _payload("env PRECOMMIT_NO_BLOCK=1 git commit -m x")
+        )
         assert code == 2
 
     def test_export_then_commit_is_blocked(self) -> None:
@@ -93,7 +99,9 @@ class TestBlockPrecommitNoBlockKnob:
 
     def test_zero_value_is_allowed(self) -> None:
         """=0 is the hook's default behavior spelled out — not a bypass."""
-        code, stderr, _ = run_hook(HOOK, _payload("PRECOMMIT_NO_BLOCK=0 git commit -m x"))
+        code, stderr, _ = run_hook(
+            HOOK, _payload("PRECOMMIT_NO_BLOCK=0 git commit -m x")
+        )
         assert code == 0
         assert stderr.strip() == ""
 
@@ -101,3 +109,62 @@ class TestBlockPrecommitNoBlockKnob:
         """Prose/grep mentions of the knob (no `=1`) are not a bypass."""
         code, _, _ = run_hook(HOOK, _payload("grep -rn PRECOMMIT_NO_BLOCK githooks/"))
         assert code == 0
+
+
+class TestPhase3EscapeHatches:
+    """Phase 3: the pre-commit is the only secret layer, so the remaining
+    documented ways a session could switch it off are blocked too."""
+
+    def test_second_chained_commit_with_n_blocks(self) -> None:
+        """AC-NV-01: every `git commit` in the command is checked, not the first."""
+        code, stderr, _ = run_hook(
+            HOOK, _payload("git commit -m a && git commit --amend -n --no-edit")
+        )
+        assert code == 2
+        assert "pip-audit" in stderr, "the layer list names the legs that exist"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git -c core.hooksPath=/dev/null commit -m x",
+            "git -c core.hookspath=/dev/null commit -m x",
+            "git config core.hooksPath /dev/null",
+            "git config --global core.hooksPath /tmp/x",
+        ],
+    )
+    def test_hookspath_override_blocks(self, cmd: str) -> None:
+        """AC-NV-02."""
+        code, stderr, _ = run_hook(HOOK, _payload(cmd))
+        assert code == 2
+        assert "core.hooksPath" in stderr
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "PRECOMMIT_LEGS= git commit -m x",
+            "PRECOMMIT_LEGS=ruff git commit -m x",
+            "export PRECOMMIT_LEGS=",
+        ],
+    )
+    def test_precommit_legs_assignment_blocks(self, cmd: str) -> None:
+        """AC-NV-03."""
+        code, stderr, _ = run_hook(HOOK, _payload(cmd))
+        assert code == 2
+        assert "PRECOMMIT_LEGS" in stderr
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git config --get core.hooksPath",
+            "git config --get core.hooksPath && echo ok",
+            "git config --get core.hooksPath --default none",  # a flag is not a value
+            "git config --unset core.hooksPath",
+            'echo "$PRECOMMIT_LEGS"',
+            "git commit -m a && sort -n f",  # regression guard: allowed before too
+        ],
+    )
+    def test_lookalikes_allowed(self, cmd: str) -> None:
+        """AC-NV-04."""
+        code, stderr, _ = run_hook(HOOK, _payload(cmd))
+        assert code == 0
+        assert stderr.strip() == ""

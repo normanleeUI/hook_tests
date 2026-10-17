@@ -38,21 +38,14 @@ EXPECTED = [
     ("A", "2.7", "block_read_env", "cat .env.example", "ALLOW"),
     ("A", "2.8", "block_read_env", "cat .env.template", "ALLOW"),
     ("A", "2.9", "block_read_env", "cat README.md", "ALLOW"),
-    # -- Group B: block_bare_pip + block_git_add_env --
+    # -- Group B: block_bare_pip --
     ("B", "2.10", "block_bare_pip", "pip install requests", "BLOCK"),
     ("B", "2.11", "block_bare_pip", "uv pip install requests", "ALLOW"),
     ("B", "2.12", "block_bare_pip", "git status", "ALLOW"),
-    ("B", "2.13", "block_git_add_env", "git add .env", "BLOCK"),
-    ("B", "2.14", "block_git_add_env", "git add .", "BLOCK"),
-    ("B", "2.15", "block_git_add_env", "git add src/clean_module.py", "ALLOW"),
-    ("B", "2.16", "block_git_add_env", "git status", "NOT_FIRED"),
     # -- Group C: cross-cutting + if: filtering --
     ("C", "2.17a", "block_bare_pip", "pip install requests", "BLOCK"),
     ("C", "2.17b", "block_read_env", "pip install requests", "ALLOW"),
-    ("C", "2.18a", "block_git_add_env", "git add .env", "BLOCK"),
     ("C", "2.18b", "block_bare_pip", "git add .env", "ALLOW"),
-    ("C", "2.22", "block_git_add_env", "git add .", "BLOCK"),
-    ("C", "2.23", "block_git_add_env", "echo hello", "NOT_FIRED"),
     # block_no_verify (no if:, fires on every Bash) — blocks hook-skipping flags.
     ("C", "2.25", "block_no_verify", "git commit --no-verify -m x", "BLOCK"),
     ("C", "2.26", "block_no_verify", "git commit -n -m x", "BLOCK"),

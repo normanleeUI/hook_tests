@@ -29,7 +29,6 @@ RUN_LOG = PROJECT_ROOT / "tests" / "test_hooks" / "mutation_run_log.jsonl"
 
 HOOK_TEST_MAP: dict[str, list[str]] = {
     "block_bare_pip.py": ["tests/test_hooks/test_block_bare_pip.py"],
-    "block_git_add_env.py": ["tests/test_hooks/test_block_git_add_env.py"],
     "block_read_env.py": ["tests/test_hooks/test_block_read_env.py"],
     "block_suppressions.py": ["tests/test_hooks/test_block_suppressions.py"],
     "check_dependency_pins.py": ["tests/test_hooks/test_check_dependency_pins.py"],

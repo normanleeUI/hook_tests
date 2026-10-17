@@ -45,12 +45,6 @@ class TestHookPerformance:
                 id="block_bare_pip",
             ),
             pytest.param(
-                "block_git_add_env.py",
-                {"tool_input": {"command": "git add .env"}},
-                2,
-                id="block_git_add_env",
-            ),
-            pytest.param(
                 "block_suppressions.py",
                 {
                     "tool_input": {

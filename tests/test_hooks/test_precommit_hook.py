@@ -1204,7 +1204,7 @@ class TestAddedLines:
 # A fake `uvx` on PATH answers per pin, so no test touches the network. It
 # logs every pin it was asked to audit: the log's absence means pip-audit was
 # never invoked.
-FAKE_UVX = r'''
+FAKE_UVX = r"""
 import json, os, sys
 args = sys.argv[1:]
 # The edge-3 flags are load-bearing: without `-f json` the real tool's
@@ -1232,7 +1232,7 @@ for line in reqs:
         deps.append({"name": name, "version": ver, "vulns": v})
 print(json.dumps({"dependencies": deps, "fixes": []}))
 sys.exit(1 if any(d.get("vulns") for d in deps) else 0)
-'''
+"""
 
 
 @pytest.fixture
@@ -1258,11 +1258,21 @@ def _lock(*pkgs: tuple[str, str], project: str | None = None) -> str:
     """A minimal uv.lock: registry packages, plus the project's own editable entry."""
     out = ["version = 1", ""]
     if project:
-        out += ["[[package]]", f'name = "{project}"', 'version = "0.1.0"',
-                'source = { editable = "." }', ""]
+        out += [
+            "[[package]]",
+            f'name = "{project}"',
+            'version = "0.1.0"',
+            'source = { editable = "." }',
+            "",
+        ]
     for name, ver in pkgs:
-        out += ["[[package]]", f'name = "{name}"', f'version = "{ver}"',
-                'source = { registry = "https://pypi.org/simple" }', ""]
+        out += [
+            "[[package]]",
+            f'name = "{name}"',
+            f'version = "{ver}"',
+            'source = { registry = "https://pypi.org/simple" }',
+            "",
+        ]
     return "\n".join(out)
 
 
@@ -1295,7 +1305,9 @@ class TestPipAuditLeg:
     def test_uv_lock_bump_to_vuln_blocks(self, hook_repo, fake_uvx) -> None:
         """AC-AUD-02."""
         repo, ledger = hook_repo
-        self._seed(repo, ledger, "uv.lock", _lock(("requests", "2.31.0"), ("idna", "3.6")))
+        self._seed(
+            repo, ledger, "uv.lock", _lock(("requests", "2.31.0"), ("idna", "3.6"))
+        )
         before = _head_count(repo)
         _stage(repo, "uv.lock", _lock(("requests", "2.25.0"), ("idna", "3.6")))
         env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
@@ -1322,11 +1334,14 @@ class TestPipAuditLeg:
         real bump in the same commit is audited."""
         repo, ledger = hook_repo
         self._seed(
-            repo, ledger, "requirements.txt",
+            repo,
+            ledger,
+            "requirements.txt",
             "Requests==2.25.0\nRequests_Toolbelt==1.0.0\nidna==3.6\n",
         )
         _stage(
-            repo, "requirements.txt",
+            repo,
+            "requirements.txt",
             "requests==2.25.0\nrequests-toolbelt==1.0.0\nidna==3.7\n",
         )
         env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
@@ -1431,14 +1446,20 @@ class TestPipAuditLeg:
         ],
         ids=["invalid-toml", "wrong-shape", "no-name"],
     )
-    def test_malformed_lock_warns_not_audited(self, hook_repo, fake_uvx, content) -> None:
+    def test_malformed_lock_warns_not_audited(
+        self, hook_repo, fake_uvx, content
+    ) -> None:
         """AC-AUD-09: no traceback, the commit lands, other legs still report."""
         repo, ledger = hook_repo
         before = _head_count(repo)
         _stage(repo, "uv.lock", content)
         _stage(repo, "mod.py", UNDOC_CODE)
         result = _commit(
-            repo, ledger, "bad lock", legs="pip-audit,docstring", extra_env=fake_uvx.env()
+            repo,
+            ledger,
+            "bad lock",
+            legs="pip-audit,docstring",
+            extra_env=fake_uvx.env(),
         )
         combined = result.stdout + result.stderr
         assert result.returncode == 0
@@ -1447,11 +1468,15 @@ class TestPipAuditLeg:
         assert "uv.lock:0  [pip-audit] NOT audited" in combined
         assert "[docstring]" in combined
 
-    def test_unrelated_commit_never_invokes_pip_audit(self, hook_repo, fake_uvx) -> None:
+    def test_unrelated_commit_never_invokes_pip_audit(
+        self, hook_repo, fake_uvx
+    ) -> None:
         """AC-AUD-10. Regression guard: passes before the leg exists too."""
         repo, ledger = hook_repo
         _stage(repo, "NOTES.md", "requests==2.25.0\n")
-        result = _commit(repo, ledger, "notes", legs="pip-audit", extra_env=fake_uvx.env())
+        result = _commit(
+            repo, ledger, "notes", legs="pip-audit", extra_env=fake_uvx.env()
+        )
         assert result.returncode == 0
         assert not fake_uvx.log.exists()
 
@@ -1463,18 +1488,27 @@ class TestPipAuditLeg:
         self._seed(repo, ledger, "requirements.txt", "requests==2.25.0\nidna==3.6\n")
         env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
         _stage(repo, "requirements.txt", "requests==2.25.0\n")
-        assert _commit(repo, ledger, "rm", legs="pip-audit", extra_env=env).returncode == 0
+        assert (
+            _commit(repo, ledger, "rm", legs="pip-audit", extra_env=env).returncode == 0
+        )
         _stage(repo, "requirements.txt", "requests==2.25.0\nflask>=2\n")
-        assert _commit(repo, ledger, "range", legs="pip-audit", extra_env=env).returncode == 0
+        assert (
+            _commit(repo, ledger, "range", legs="pip-audit", extra_env=env).returncode
+            == 0
+        )
         assert not fake_uvx.log.exists()
 
-    def test_deleted_dep_file_never_invokes_pip_audit(self, hook_repo, fake_uvx) -> None:
+    def test_deleted_dep_file_never_invokes_pip_audit(
+        self, hook_repo, fake_uvx
+    ) -> None:
         """A deleted requirements file is not staged content: no audit, and no
         NOT-audited warning from a failed `git show :<path>`."""
         repo, ledger = hook_repo
         self._seed(repo, ledger, "requirements.txt", "requests==2.25.0\n")
         _run(repo, "rm", "-q", "requirements.txt")
-        result = _commit(repo, ledger, "drop reqs", legs="pip-audit", extra_env=fake_uvx.env())
+        result = _commit(
+            repo, ledger, "drop reqs", legs="pip-audit", extra_env=fake_uvx.env()
+        )
         assert result.returncode == 0
         assert "NOT audited" not in result.stdout + result.stderr
         assert not fake_uvx.log.exists()
@@ -1530,7 +1564,9 @@ class TestSecretLeg:
         """AC-SEC-04."""
         repo, ledger = hook_repo
         before = _head_count(repo)
-        (repo / "legacy.cfg").write_bytes(b"caf\xe9 = 1\nkey = " + AWS_KEY.encode() + b"\n")
+        (repo / "legacy.cfg").write_bytes(
+            b"caf\xe9 = 1\nkey = " + AWS_KEY.encode() + b"\n"
+        )
         _run(repo, "add", "legacy.cfg")
         result = _commit(repo, ledger, "latin1", legs="secret")
         self._assert_blocked(repo, before, result, "legacy.cfg:2")
@@ -1666,3 +1702,98 @@ class TestIterAdditions:
             ("a b.txt", 10, b"new"),
             ("x", 1, b"x1"),
         ]
+
+
+# ── .env name leg (phase 3 step 3) ─────────────────────────────────────────
+# .env fixtures are created here in Python: the live block_read_env refuses
+# any Bash command whose text names a .env file.
+ENV_SENTINEL = "SENTINEL_" + "VALUE_DO_NOT_PRINT"
+
+
+class TestEnvNameLeg:
+    def _add_env(self, repo: Path, rel: str, force: bool = False) -> None:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"API_TOKEN={ENV_SENTINEL}\n")
+        _run(repo, "add", *(["-f"] if force else []), rel)
+
+    def _assert_env_blocked(self, repo: Path, before: int, result, rel: str) -> None:
+        assert result.returncode == 1, result.stderr
+        assert _head_count(repo) == before
+        assert f"\n   {rel}:0  " in result.stderr
+
+    def test_force_added_root_env_blocks(self, hook_repo) -> None:
+        """AC-ENV-01: gitignored, then force-added. The message names the path
+        and never prints the file's contents."""
+        repo, ledger = hook_repo
+        _stage(repo, ".gitignore", ".env\n")
+        assert _commit(repo, ledger, "ignore", legs="").returncode == 0
+        before = _head_count(repo)
+        self._add_env(repo, ".env", force=True)
+        result = _commit(repo, ledger, "oops", legs="secret")
+        self._assert_env_blocked(repo, before, result, ".env")
+        text = ledger.read_text() if ledger.exists() else ""
+        for out in (result.stdout, result.stderr, text):
+            assert ENV_SENTINEL not in out
+
+    def test_nested_env_local_blocks(self, hook_repo) -> None:
+        """AC-ENV-02."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        self._add_env(repo, "app/.env.local")
+        result = _commit(repo, ledger, "oops", legs="secret")
+        self._assert_env_blocked(repo, before, result, "app/.env.local")
+
+    @pytest.mark.parametrize("kind", ["example", "sample", "template", "dist"])
+    def test_env_example_lands(self, hook_repo, kind) -> None:
+        """AC-ENV-03: templates are documentation. Regression guard: passes
+        before the leg exists too."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        self._add_env(repo, f".env.{kind}")
+        result = _commit(repo, ledger, "template", legs="secret")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+
+    def test_envrc_lands(self, hook_repo) -> None:
+        """AC-ENV-04 (plus `x.env`, Decision 8). Regression guard: passes
+        before the leg exists too."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        self._add_env(repo, ".envrc")
+        self._add_env(repo, "config.env")
+        result = _commit(repo, ledger, "direnv", legs="secret")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+
+    def test_removing_tracked_env_lands(self, hook_repo) -> None:
+        """AC-ENV-05: the fix itself must never be blocked. Regression guard:
+        passes before the leg exists too."""
+        repo, ledger = hook_repo
+        self._add_env(repo, ".env")
+        assert _commit(repo, ledger, "past mistake", legs="").returncode == 0
+        before = _head_count(repo)
+        _run(repo, "rm", "-q", "--cached", ".env")
+        result = _commit(repo, ledger, "untrack", legs="secret")
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+
+    def test_non_ascii_dir_env_blocks(self, hook_repo) -> None:
+        """AC-ENV-06: names come from `-z`, so they arrive unquoted."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        self._add_env(repo, "données/.env")
+        result = _commit(repo, ledger, "oops", legs="secret")
+        self._assert_env_blocked(repo, before, result, "données/.env")
+
+    def test_env_message_routes_fix_via_user(self, hook_repo) -> None:
+        """AC-ENV-07 (Decision 9): block_read_env refuses any session command
+        naming .env, so the session is told to `git reset` and ask the user."""
+        repo, ledger = hook_repo
+        self._add_env(repo, ".env")
+        result = _commit(repo, ledger, "oops", legs="secret")
+        assert result.returncode == 1
+        assert "`git rm --cached .env`" in result.stderr
+        assert ".gitignore" in result.stderr
+        assert "`git reset`" in result.stderr
+        assert "ask the user" in result.stderr

@@ -193,6 +193,28 @@ class TestRuffFormat:
         log = _read_log(log_file)
         assert "uvx ruff format" in log
 
+    def test_uses_project_venv_ruff_when_present(self, fake_tool_env, tmp_path):
+        """Regression guard (passes before and after phase 2 rewrote this
+        call): inside a git repo with an executable .venv/bin/ruff, the hook
+        formats with that ruff and never falls back to uvx."""
+        env, log_file = fake_tool_env
+        _init_git_repo(tmp_path)
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        stub = venv_bin / "ruff"
+        stub.write_text(
+            f'#!/usr/bin/env bash\necho "venv-ruff $@" >> {log_file}\nexit 0\n'
+        )
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        py_file = tmp_path / "module.py"
+        py_file.write_text("x=1\n")
+
+        run_bash_hook("ruff_format.sh", edit_payload(str(py_file)), env=env)
+
+        log = _read_log(log_file)
+        assert f"venv-ruff format {py_file}" in log
+        assert "uvx" not in log
+
 
 # ── git_pull_on_start.sh ───────────────────────────────────────────────────
 

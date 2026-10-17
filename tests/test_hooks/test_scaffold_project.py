@@ -30,7 +30,6 @@ EXPECTED_DIRS = [
     "docs/decisions",
     "docs/reports",
     "docs/notes",
-    "docs/prompts",
     "tests",
 ]
 
@@ -55,6 +54,8 @@ class TestFreshProject:
         for d in EXPECTED_DIRS:
             assert (proj / d).is_dir(), f"missing {d}"
             assert (proj / d / ".gitkeep").exists(), f"missing .gitkeep in {d}"
+        # /step creates docs/prompts/ on demand; scaffold no longer does
+        assert not (proj / "docs" / "prompts").exists()
         # package dir derived from the directory name, sanitized
         assert (proj / "src" / "my_proj").is_dir()
         assert (proj / "CLAUDE.md").exists()

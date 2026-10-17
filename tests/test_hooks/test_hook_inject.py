@@ -1,12 +1,7 @@
-"""Tests for hook_inject.py shared infrastructure module.
-
-Tests inline injection (remove/inject comments), the read_clean_write
-orchestrator, and state-file management utilities.
-"""
+"""Tests for hook_inject.py: the state-dir helpers the pip-audit hooks import."""
 
 import os
 import sys
-import time
 
 # HOOKS_DIR points the import at another hooks dir; defaults to the live
 # ~/.claude/hooks, which is what this suite tests.
@@ -14,134 +9,7 @@ sys.path.insert(0, os.environ.get("HOOKS_DIR", os.path.expanduser("~/.claude/hoo
 from hook_inject import (
     ensure_state_dir,
     get_state_dir,
-    inject_at_line,
-    read_clean_write,
-    remove_hook_comments,
 )
-
-
-class TestRemoveHookComments:
-    """Verify stale hook comment removal."""
-
-    def test_remove_hook_comments_cleans_matching_lines(self):
-        lines = [
-            "def foo():\n",
-            "# HOOK:DOCSTRING: missing docstring\n",
-            "    pass\n",
-            "    return 1\n",
-        ]
-        cleaned = remove_hook_comments(lines, "DOCSTRING")
-        assert len(cleaned) == 3
-        assert not any("HOOK:DOCSTRING:" in line for line in cleaned)
-
-    def test_remove_hook_comments_preserves_non_matching(self):
-        lines = [
-            "def foo():\n",
-            "# HOOK:BANDIT: security issue\n",
-            "    pass\n",
-            "    return 1\n",
-        ]
-        cleaned = remove_hook_comments(lines, "DOCSTRING")
-        assert len(cleaned) == 4
-        assert any("HOOK:BANDIT:" in line for line in cleaned)
-
-
-class TestInjectAtLine:
-    """Verify comment insertion at 1-based line numbers."""
-
-    def test_inject_at_line_inserts_before_target(self):
-        lines = ["line1\n", "line2\n", "line3\n"]
-        inject_at_line(lines, 2, "TEST", "found issue")
-        # Full format contract: prefix (for self-cleaning) + guardrail framing that
-        # the heed-rate probe showed lifts acknowledgement (see HEED_PROBE.md).
-        assert lines[1] == (
-            "# HOOK:TEST: [automated guardrail] found issue "
-            "-- fix or explicitly acknowledge before continuing; re-inserted until resolved\n"
-        )
-        assert lines[2] == "line2\n"
-
-    def test_inject_at_line_keeps_self_cleaning_prefix(self):
-        """The reframed comment must still start with `# HOOK:{name}:` so
-        remove_hook_comments() strips it on the next run (no stale accumulation)."""
-        lines = ["x\n"]
-        inject_at_line(lines, 1, "BANDIT", "[B105] secret")
-        assert lines[0].startswith("# HOOK:BANDIT:")
-        assert lines[0].endswith("\n") and lines[0].count("\n") == 1  # single line
-
-    def test_inject_at_line_preserves_all_content(self):
-        original = ["line1\n", "line2\n", "line3\n"]
-        lines = list(original)
-        inject_at_line(lines, 2, "TEST", "found issue")
-        non_hook = [line for line in lines if not line.startswith("# HOOK:")]
-        assert non_hook == original
-
-
-class TestReadCleanWrite:
-    """Verify the full read-clean-analyze-inject-write orchestrator."""
-
-    def test_read_clean_write_no_change_no_write(self, tmp_path):
-        """Clean file + analyzer returns [] -> mtime unchanged."""
-        f = tmp_path / "clean.py"
-        f.write_text("def foo():\n    pass\n")
-        mtime_before = f.stat().st_mtime
-        # Small sleep to ensure mtime would differ if file were written
-        time.sleep(0.05)
-
-        read_clean_write(str(f), "TEST", lambda content, lines: [])
-
-        mtime_after = f.stat().st_mtime
-        assert mtime_before == mtime_after
-
-    def test_read_clean_write_cleanup_only(self, tmp_path):
-        """File with stale comment + analyzer returns [] -> stale comment removed."""
-        f = tmp_path / "stale.py"
-        f.write_text("def foo():\n# HOOK:TEST: old finding\n    pass\n")
-
-        read_clean_write(str(f), "TEST", lambda content, lines: [])
-
-        result = f.read_text()
-        assert "HOOK:TEST:" not in result
-        assert "def foo():\n    pass\n" == result
-
-    def test_read_clean_write_multi_finding_line_order(self, tmp_path):
-        """3-line file, findings at lines 1 and 3 -> comments at correct positions."""
-        f = tmp_path / "multi.py"
-        f.write_text("aaa\nbbb\nccc\n")
-
-        def analyzer(content, lines):
-            return [(1, "issue at line 1"), (3, "issue at line 3")]
-
-        read_clean_write(str(f), "TEST", analyzer)
-
-        result_lines = f.read_text().splitlines(keepends=True)
-        # This test pins line ORDERING, not comment wording: assert the prefix and
-        # the finding text land at the right positions (format is contracted above).
-        assert (
-            result_lines[0].startswith("# HOOK:TEST:")
-            and "issue at line 1" in result_lines[0]
-        )
-        assert result_lines[1] == "aaa\n"
-        assert (
-            result_lines[3].startswith("# HOOK:TEST:")
-            and "issue at line 3" in result_lines[3]
-        )
-        assert result_lines[4] == "ccc\n"
-        assert len(result_lines) == 5
-
-    def test_read_clean_write_analyzer_sees_clean_content(self, tmp_path):
-        """File has stale comment -> analyzer receives content without it."""
-        f = tmp_path / "has_stale.py"
-        f.write_text("def foo():\n# HOOK:TEST: old\n    pass\n")
-        seen_content = []
-
-        def analyzer(content, lines):
-            seen_content.append(content)
-            return []
-
-        read_clean_write(str(f), "TEST", analyzer)
-
-        assert "HOOK:TEST:" not in seen_content[0]
-        assert seen_content[0] == "def foo():\n    pass\n"
 
 
 class TestStateDir:

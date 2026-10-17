@@ -6,7 +6,8 @@ the rest, and ends with a "SYNC INCOMPLETE" summary + exit 1.
 
 sync.sh syncs into its own dirname (REPO_DIR derives from $0), so each test
 runs a COPY of the script from a tmp_path "repo" dir and feeds it a fake
-live config via --from. An unwritable destination is simulated by chmod 555
+live config via --from (with --force: the fixtures aren't git repos, so
+sync.sh's direction guard would refuse). An unwritable destination is simulated by chmod 555
 on the repo dir, with the should-succeed destination files pre-created
 writable (cp truncates in place, so those still work).
 """
@@ -49,7 +50,7 @@ def run_sync(repo: Path, fake: Path, *args: str) -> subprocess.CompletedProcess:
 
 def test_clean_sync_exits_zero_without_summary(setup):
     repo, fake = setup
-    result = run_sync(repo, fake)
+    result = run_sync(repo, fake, "--force")
     assert result.returncode == 0, result.stderr
     assert "SYNC INCOMPLETE" not in result.stdout
     assert (repo / "statusline.py").read_text() == "status\n"
@@ -63,7 +64,7 @@ def test_unwritable_destination_fails_loudly_but_syncs_rest(setup):
     (repo / "settings.json").write_text("old\n")
     repo.chmod(0o555)
 
-    result = run_sync(repo, fake)
+    result = run_sync(repo, fake, "--force")
     assert result.returncode == 1
     assert "SYNC INCOMPLETE: 1 file(s)/dir(s)" in result.stdout
     assert str(repo / "statusline.py") in result.stdout
@@ -88,7 +89,7 @@ def test_unwritable_dir_mkdir_fails_loudly_not_abort(setup):
     (repo / "settings.json").write_text("old\n")
     repo.chmod(0o555)
 
-    result = run_sync(repo, fake)
+    result = run_sync(repo, fake, "--force")
     assert result.returncode == 1
     # Both the statusline.py cp and the hooks/ mkdir fail; the run still finishes.
     assert "SYNC INCOMPLETE: 2 file(s)/dir(s)" in result.stdout
@@ -105,7 +106,7 @@ def test_check_mode_unaffected(setup):
     assert "SYNC INCOMPLETE" not in result.stdout
 
     # In sync: exit 0 and IN_SYNC, even with a read-only repo (no writes).
-    clean = run_sync(repo, fake)
+    clean = run_sync(repo, fake, "--force")
     assert clean.returncode == 0
     repo.chmod(0o555)
     result = run_sync(repo, fake, "--check")

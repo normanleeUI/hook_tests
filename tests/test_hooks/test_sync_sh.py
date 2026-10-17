@@ -33,7 +33,7 @@ def setup(tmp_path):
     shutil.copy(REPO_SYNC, repo / "sync.sh")
     (fake / "CLAUDE.md").write_text("global\n")
     (fake / "settings.json").write_text("{}\n")
-    (fake / ".mcp.json").write_text('{"mcp": 1}\n')
+    (fake / "statusline.py").write_text("status\n")
     yield repo, fake
     repo.chmod(0o755)  # undo any read-only test setup so tmp_path cleans up
 
@@ -52,12 +52,12 @@ def test_clean_sync_exits_zero_without_summary(setup):
     result = run_sync(repo, fake)
     assert result.returncode == 0, result.stderr
     assert "SYNC INCOMPLETE" not in result.stdout
-    assert (repo / ".mcp.json").read_text() == '{"mcp": 1}\n'
+    assert (repo / "statusline.py").read_text() == "status\n"
 
 
 def test_unwritable_destination_fails_loudly_but_syncs_rest(setup):
     repo, fake = setup
-    # Destinations that should succeed exist and are writable; .mcp.json is
+    # Destinations that should succeed exist and are writable; statusline.py is
     # absent, so its cp must create a file in the read-only repo dir → fails.
     (repo / "CLAUDE.global.md").write_text("old\n")
     (repo / "settings.json").write_text("old\n")
@@ -66,7 +66,7 @@ def test_unwritable_destination_fails_loudly_but_syncs_rest(setup):
     result = run_sync(repo, fake)
     assert result.returncode == 1
     assert "SYNC INCOMPLETE: 1 file(s)/dir(s)" in result.stdout
-    assert str(repo / ".mcp.json") in result.stdout
+    assert str(repo / "statusline.py") in result.stdout
     # The failure did not abort the run: later sections still ran, and the
     # other config files were still synced.
     assert "[5/5]" in result.stdout
@@ -90,7 +90,7 @@ def test_unwritable_dir_mkdir_fails_loudly_not_abort(setup):
 
     result = run_sync(repo, fake)
     assert result.returncode == 1
-    # Both the .mcp.json cp and the hooks/ mkdir fail; the run still finishes.
+    # Both the statusline.py cp and the hooks/ mkdir fail; the run still finishes.
     assert "SYNC INCOMPLETE: 2 file(s)/dir(s)" in result.stdout
     assert str(repo / "hooks") in result.stdout
     assert "[5/5]" in result.stdout

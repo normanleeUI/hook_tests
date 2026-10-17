@@ -143,6 +143,24 @@ class TestPhase3EscapeHatches:
     @pytest.mark.parametrize(
         "cmd",
         [
+            "git config --global --unset core.hooksPath",
+            "git config --global --unset-all core.hooksPath",
+            "git config --unset-all --system core.hooksPath",
+            "git config unset --global core.hooksPath",  # git 2.46+ subcommand form
+        ],
+    )
+    def test_global_unset_blocks(self, cmd: str) -> None:
+        """Unsetting the GLOBAL key switches the global pre-commit off as surely
+        as pointing it at /dev/null. The pre-commit framework's own hint
+        (`git config --unset-all core.hooksPath`) leads a session here: run
+        locally it is a no-op, so the next try adds --global."""
+        code, stderr, _ = run_hook(HOOK, _payload(cmd))
+        assert code == 2
+        assert "pre-commit install" in stderr, "the message names the usual trigger"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
             "PRECOMMIT_LEGS= git commit -m x",
             "PRECOMMIT_LEGS=ruff git commit -m x",
             "export PRECOMMIT_LEGS=",
@@ -166,6 +184,9 @@ class TestPhase3EscapeHatches:
             "rg -i core.hookspath docs",
             "git grep -n core.hooksPath",
             "git config --unset core.hooksPath",
+            "git config --unset-all core.hooksPath",  # local: the global key still applies
+            "git config --global --get core.hooksPath",
+            "git config --global --unset user.name && git config --get core.hooksPath",
             'echo "$PRECOMMIT_LEGS"',
             "git commit -m a && sort -n f",  # regression guard: allowed before too
         ],

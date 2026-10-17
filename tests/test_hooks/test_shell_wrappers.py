@@ -194,9 +194,8 @@ class TestRuffFormat:
         assert "uvx ruff format" in log
 
     def test_uses_project_venv_ruff_when_present(self, fake_tool_env, tmp_path):
-        """Regression guard (passes before and after phase 2 rewrote this
-        call): inside a git repo with an executable .venv/bin/ruff, the hook
-        formats with that ruff and never falls back to uvx."""
+        """Inside a git repo with an executable .venv/bin/ruff, the hook formats
+        with that ruff and never falls back to uvx."""
         env, log_file = fake_tool_env
         _init_git_repo(tmp_path)
         venv_bin = tmp_path / ".venv" / "bin"

@@ -182,12 +182,7 @@ PYEOF
                 total="${line#TOTAL:}"
                 # 17 unique command strings (block_read_env.py wired on both
                 # Read and Bash counts once) — matches CANONICAL_HOOKS in
-                # tests/test_hooks/test_hook_wiring.py. Down one after the
-                # 2026-08 pre-commit migration retired the batch_checks.sh Stop
-                # hook (pyright/bandit/semgrep/docstrings now run in the git
-                # pre-commit hook; seeds leg dropped system-wide). 18 after
-                # that; 17 again from 2026-10-16, when the last Stop hook (a
-                # session-end lint auto-fix) was deleted.
+                # tests/test_hooks/test_hook_wiring.py.
                 if [[ "$total" -eq 17 ]]; then
                     pass "Total hooks wired: $total (expected 17)"
                 else

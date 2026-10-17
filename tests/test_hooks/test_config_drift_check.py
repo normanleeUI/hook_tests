@@ -42,6 +42,8 @@ def fake_home(tmp_path):
     (home / ".claude").mkdir()
 
     shutil.copy(REPO_HOOK, repo / "hooks/config_drift_check.sh")
+    # The heal's dirty check reads the deployed path list from the repo.
+    shutil.copy(REPO_HOOK.parent.parent / "deploy.paths", repo / "deploy.paths")
     # Fresh ruleset stamp so the semgrep-staleness nudge stays quiet.
     (repo / "semgrep_rules/RULESET_STAMP").write_text(
         f"{datetime.date.today().isoformat()}\n"
@@ -229,6 +231,19 @@ def test_in_sync_dirty_tree_does_not_heal(fake_home):
     (home / ".claude/.last_install").write_text(original)
     run_hook(home, repo)
     assert (home / ".claude/.last_install").read_text() == original
+
+
+def test_missing_deploy_paths_skips_heal_loudly(fake_home):
+    """Without deploy.paths the dirty check would cover the whole repo (or
+    nothing): skip the heal and say why in the debug log."""
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    (repo / "deploy.paths").unlink()
+    original = "2026-01-01T00:00:00-07:00 deadbee\n"
+    (home / ".claude/.last_install").write_text(original)
+    assert run_hook(home, repo) == ""
+    assert (home / ".claude/.last_install").read_text() == original
+    assert "deploy.paths missing" in (home / "hook_debug.log").read_text()
 
 
 def test_drift_list_capped_at_ten(fake_home):

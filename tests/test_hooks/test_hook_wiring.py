@@ -179,8 +179,8 @@ DEPRECATED_HOOKS: dict[str, str] = {
 KNOWN_LIBRARIES: set[str] = {
     "hook_log.py",
     "hook_inject.py",
-    # On-demand scaffold tool: offered by project_health_check, run by the
-    # model only on user acceptance. Never wired to an event by design.
+    # On-demand scaffold tool: /project-setup (step 6) runs it once the user
+    # agrees. Never wired to an event by design.
     "scaffold_project.py",
 }
 

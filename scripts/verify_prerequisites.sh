@@ -54,11 +54,9 @@ PYTHON_HOOKS=(
     block_bare_pip.py
     scan_secrets_on_commit.py
     block_git_add_env.py
-    pip_audit_guard.py
     check_dependency_pins.py
     block_suppressions.py
     block_glob_deny_rules.py
-    pip_audit_check.py
     scan_prompt_injection.py
 )
 
@@ -94,7 +92,6 @@ done
 
 # ── Library files (not hooks, but hooks import them) ─────────────────────────
 LIBRARY_FILES=(
-    hook_inject.py
     hook_log.py
 )
 

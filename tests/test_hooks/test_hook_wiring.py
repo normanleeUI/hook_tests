@@ -92,12 +92,6 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Bash",
         "if_condition": None,
     },
-    "pip_audit_guard.py": {
-        "event": "PreToolUse",
-        "interpreter": "python3",
-        "matcher": "Bash",
-        "if_condition": None,
-    },
     # #14 slopsquatting guard; asks (not blocks), watched live 2026-10-14
     "gate_new_packages.py": {
         "event": "PreToolUse",
@@ -130,13 +124,6 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
         "matcher": "Edit|Write",
         "if_condition": None,
     },
-    # PostToolUse -- Bash group
-    "pip_audit_check.py": {
-        "event": "PostToolUse",
-        "interpreter": "python3",
-        "matcher": "Bash",
-        "if_condition": None,
-    },
     # PostToolUse -- WebFetch|mcp__.*
     "scan_prompt_injection.py": {
         "event": "PostToolUse",
@@ -147,6 +134,11 @@ CANONICAL_HOOKS: dict[str, dict[str, str | None]] = {
 }
 
 DEPRECATED_HOOKS: dict[str, str] = {
+    # Phase 3: pip-audit moved into the pre-commit's pip-audit leg, which
+    # audits the staged pins a commit adds or changes.
+    "pip_audit_check.py": "Deleted 2026-10-16 (phase 3): replaced by the pre-commit pip-audit leg",
+    "pip_audit_guard.py": "Deleted 2026-10-16 (phase 3): replaced by the pre-commit pip-audit leg",
+    "hook_inject.py": "Deleted 2026-10-16 (phase 3): state-dir helper; its last users were the pip-audit hooks",
     "ruff_lint.sh": (
         "Deleted 2026-10-16 (phase 2): auto-fixed WIP at every Stop (EP10); "
         "the pre-commit ruff leg blocks lint on added lines"
@@ -178,7 +170,6 @@ DEPRECATED_HOOKS: dict[str, str] = {
 
 KNOWN_LIBRARIES: set[str] = {
     "hook_log.py",
-    "hook_inject.py",
     # On-demand scaffold tool: /project-setup (step 6) runs it once the user
     # agrees. Never wired to an event by design.
     "scaffold_project.py",

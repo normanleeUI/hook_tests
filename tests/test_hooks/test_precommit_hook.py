@@ -1197,3 +1197,283 @@ class TestAddedLines:
         mod = _load_hook_module(monkeypatch, tmp_path)
         monkeypatch.setattr(mod, "_git", lambda *a: "@@ -3 +7 @@\n+x\n")
         assert mod.added_lines("f.py") == {7}
+
+
+# ── pip-audit leg (phase 3 step 1) ─────────────────────────────────────────
+# A fake `uvx` on PATH answers per pin, so no test touches the network. It
+# logs every pin it was asked to audit: the log's absence means pip-audit was
+# never invoked.
+FAKE_UVX = r'''
+import json, os, sys
+args = sys.argv[1:]
+# The edge-3 flags are load-bearing: without `-f json` the real tool's
+# output never parses, so every audit would read "NOT audited".
+if args[:1] != ["pip-audit"] or not (
+    {"--no-deps", "--disable-pip", "--progress-spinner=off"} <= set(args)
+    and args[args.index("-f") + 1] == "json"
+):
+    sys.exit(2)
+reqs = open(args[args.index("-r") + 1]).read().splitlines()
+with open(os.environ["FAKE_AUDIT_LOG"], "a") as f:
+    f.writelines(line + "\n" for line in reqs)
+if os.environ.get("FAKE_AUDIT_MODE") == "fail":
+    sys.exit(1)
+vulns = set(filter(None, os.environ.get("FAKE_VULNS", "").split(",")))
+skip = set(filter(None, os.environ.get("FAKE_SKIP", "").split(",")))
+deps = []
+for line in reqs:
+    name, _, ver = line.partition("==")
+    if name in skip:
+        deps.append({"name": name, "skip_reason":
+                     "Dependency not found on PyPI and could not be audited: " + name})
+    else:
+        v = [{"id": "PYSEC-TEST-1", "fix_versions": ["9.9"]}] if line in vulns else []
+        deps.append({"name": name, "version": ver, "vulns": v})
+print(json.dumps({"dependencies": deps, "fixes": []}))
+sys.exit(1 if any(d.get("vulns") for d in deps) else 0)
+'''
+
+
+@pytest.fixture
+def fake_uvx(tmp_path: Path) -> SimpleNamespace:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uvx = bin_dir / "uvx"
+    uvx.write_text(f"#!{sys.executable}\n{FAKE_UVX}")
+    uvx.chmod(0o755)
+    log = tmp_path / "audit_calls.log"
+
+    def env(**extra: str) -> dict[str, str]:
+        return {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "FAKE_AUDIT_LOG": str(log),
+            **extra,
+        }
+
+    return SimpleNamespace(env=env, log=log)
+
+
+def _lock(*pkgs: tuple[str, str], project: str | None = None) -> str:
+    """A minimal uv.lock: registry packages, plus the project's own editable entry."""
+    out = ["version = 1", ""]
+    if project:
+        out += ["[[package]]", f'name = "{project}"', 'version = "0.1.0"',
+                'source = { editable = "." }', ""]
+    for name, ver in pkgs:
+        out += ["[[package]]", f'name = "{name}"', f'version = "{ver}"',
+                'source = { registry = "https://pypi.org/simple" }', ""]
+    return "\n".join(out)
+
+
+def _audited(fake) -> list[str]:
+    return sorted(fake.log.read_text().splitlines()) if fake.log.exists() else []
+
+
+class TestPipAuditLeg:
+    def _seed(self, repo: Path, ledger: Path, name: str, content: str) -> None:
+        """Commit a dependency file with every leg off, so it is HEAD's version."""
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        _stage(repo, name, content)
+        assert _commit(repo, ledger, "seed", legs="").returncode == 0
+
+    def test_requirements_added_vuln_blocks(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-01."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "requirements.txt", "requests==2.25.0\n")
+        env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
+        result = _commit(repo, ledger, "add dep", legs="pip-audit", extra_env=env)
+        assert result.returncode == 1
+        assert _head_count(repo) == before
+        assert BLOCK_HEADER in result.stderr
+        assert "requirements.txt" in result.stderr
+        assert "requests 2.25.0" in result.stderr
+        assert "PYSEC-TEST-1" in result.stderr
+        assert "(fix: 9.9)" in result.stderr
+
+    def test_uv_lock_bump_to_vuln_blocks(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-02."""
+        repo, ledger = hook_repo
+        self._seed(repo, ledger, "uv.lock", _lock(("requests", "2.31.0"), ("idna", "3.6")))
+        before = _head_count(repo)
+        _stage(repo, "uv.lock", _lock(("requests", "2.25.0"), ("idna", "3.6")))
+        env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
+        result = _commit(repo, ledger, "bump", legs="pip-audit", extra_env=env)
+        assert result.returncode == 1
+        assert _head_count(repo) == before
+        assert "uv.lock" in result.stderr
+        assert "PYSEC-TEST-1" in result.stderr
+
+    def test_unchanged_vuln_pin_does_not_block(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-03: the unchanged vulnerable pin is never sent to pip-audit."""
+        repo, ledger = hook_repo
+        self._seed(repo, ledger, "requirements.txt", "requests==2.25.0\nidna==3.6\n")
+        before = _head_count(repo)
+        _stage(repo, "requirements.txt", "requests==2.25.0\nidna==3.7\n")
+        env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
+        result = _commit(repo, ledger, "bump idna", legs="pip-audit", extra_env=env)
+        assert result.returncode == 0, result.stderr
+        assert _head_count(repo) == before + 1
+        assert _audited(fake_uvx) == ["idna==3.7"]
+
+    def test_respelt_name_is_not_a_change(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-12: case and separator respellings are not changes; only the
+        real bump in the same commit is audited."""
+        repo, ledger = hook_repo
+        self._seed(
+            repo, ledger, "requirements.txt",
+            "Requests==2.25.0\nRequests_Toolbelt==1.0.0\nidna==3.6\n",
+        )
+        _stage(
+            repo, "requirements.txt",
+            "requests==2.25.0\nrequests-toolbelt==1.0.0\nidna==3.7\n",
+        )
+        env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
+        result = _commit(repo, ledger, "respell", legs="pip-audit", extra_env=env)
+        assert result.returncode == 0, result.stderr
+        assert _audited(fake_uvx) == ["idna==3.7"]
+
+    def test_staged_blob_is_audited_not_worktree(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-04."""
+        repo, ledger = hook_repo
+        _stage(repo, "requirements.txt", "requests==2.25.0\n")
+        (repo / "requirements.txt").write_text("requests==2.32.0\n")  # unstaged
+        env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
+        result = _commit(repo, ledger, "add dep", legs="pip-audit", extra_env=env)
+        assert result.returncode == 1
+        assert "PYSEC-TEST-1" in result.stderr
+        assert _audited(fake_uvx) == ["requests==2.25.0"]
+
+    def test_new_lock_editable_project_not_audited(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-05: only registry packages are audited, so the project's own
+        editable entry never reaches pip-audit and is never warned about."""
+        repo, ledger = hook_repo
+        _stage(repo, "uv.lock", _lock(("idna", "3.6"), project="myproj"))
+        env = fake_uvx.env(FAKE_SKIP="myproj")
+        result = _commit(repo, ledger, "new lock", legs="pip-audit", extra_env=env)
+        assert result.returncode == 0, result.stderr
+        assert "myproj" not in result.stdout + result.stderr
+        assert _audited(fake_uvx) == ["idna==3.6"]
+
+    def test_nested_backend_lock_is_audited(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-06."""
+        repo, ledger = hook_repo
+        (repo / "backend").mkdir()
+        _stage(repo, "backend/uv.lock", _lock(("requests", "2.25.0")))
+        env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
+        result = _commit(repo, ledger, "backend lock", legs="pip-audit", extra_env=env)
+        assert result.returncode == 1
+        assert "backend/uv.lock" in result.stderr
+        assert "PYSEC-TEST-1" in result.stderr
+
+    def test_audit_failure_warns_not_audited(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-07: empty stdout + exit 1 (the real tool offline) is not
+        'clean' — the commit lands, loudly unaudited."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "requirements.txt", "requests==2.25.0\n")
+        env = fake_uvx.env(FAKE_AUDIT_MODE="fail")
+        result = _commit(repo, ledger, "add dep", legs="pip-audit", extra_env=env)
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0
+        assert _head_count(repo) == before + 1
+        assert "NOT audited" in combined
+        assert "requirements.txt" in combined
+        text = ledger.read_text()
+        assert "error:" in text
+        assert "clean" not in text
+
+    def test_audit_timeout_warns_not_audited(self, monkeypatch, tmp_path) -> None:
+        """AC-AUD-07, unit level: a pip-audit timeout is a NOT-audited warning."""
+        mod = _load_hook_module(monkeypatch, tmp_path)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+        (repo / "requirements.txt").write_text("requests==2.25.0\n")
+        _run(repo, "add", "requirements.txt")
+        monkeypatch.chdir(repo)
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            if "pip-audit" in cmd:
+                raise subprocess.TimeoutExpired(cmd, 120)
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+        hits = mod.pip_audit_leg("requirements.txt")
+        assert [(f, n, b) for f, n, _, b in hits] == [("requirements.txt", 0, False)]
+        msg = hits[0][2]
+        assert msg.startswith("[pip-audit] NOT audited:")
+        assert msg.endswith("(1 changed pin(s))")
+        assert "error:" in (tmp_path / "unit-ledger.log").read_text()
+
+    def test_skipped_package_warns_by_name(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-08."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "requirements.txt", "obscurepkg==1.0\n")
+        env = fake_uvx.env(FAKE_SKIP="obscurepkg")
+        result = _commit(repo, ledger, "add dep", legs="pip-audit", extra_env=env)
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0
+        assert _head_count(repo) == before + 1
+        assert WARN_HEADER in combined
+        assert "[pip-audit] obscurepkg not audited" in combined
+        assert "Dependency not found on PyPI" in combined
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            '[[package]\nname = "x"\n',  # invalid TOML
+            'package = "x"\n',  # valid TOML, wrong shape
+            '[[package]]\nversion = "1.0"\nsource = { registry = "https://pypi.org/simple" }\n',
+        ],
+        ids=["invalid-toml", "wrong-shape", "no-name"],
+    )
+    def test_malformed_lock_warns_not_audited(self, hook_repo, fake_uvx, content) -> None:
+        """AC-AUD-09: no traceback, the commit lands, other legs still report."""
+        repo, ledger = hook_repo
+        before = _head_count(repo)
+        _stage(repo, "uv.lock", content)
+        _stage(repo, "mod.py", UNDOC_CODE)
+        result = _commit(
+            repo, ledger, "bad lock", legs="pip-audit,docstring", extra_env=fake_uvx.env()
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0
+        assert _head_count(repo) == before + 1
+        assert "Traceback" not in combined
+        assert "uv.lock:0  [pip-audit] NOT audited" in combined
+        assert "[docstring]" in combined
+
+    def test_unrelated_commit_never_invokes_pip_audit(self, hook_repo, fake_uvx) -> None:
+        """AC-AUD-10. Regression guard: passes before the leg exists too."""
+        repo, ledger = hook_repo
+        _stage(repo, "NOTES.md", "requests==2.25.0\n")
+        result = _commit(repo, ledger, "notes", legs="pip-audit", extra_env=fake_uvx.env())
+        assert result.returncode == 0
+        assert not fake_uvx.log.exists()
+
+    def test_removed_or_unpinned_pins_never_invoke_pip_audit(
+        self, hook_repo, fake_uvx
+    ) -> None:
+        """AC-AUD-11. Regression guard: passes before the leg exists too."""
+        repo, ledger = hook_repo
+        self._seed(repo, ledger, "requirements.txt", "requests==2.25.0\nidna==3.6\n")
+        env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
+        _stage(repo, "requirements.txt", "requests==2.25.0\n")
+        assert _commit(repo, ledger, "rm", legs="pip-audit", extra_env=env).returncode == 0
+        _stage(repo, "requirements.txt", "requests==2.25.0\nflask>=2\n")
+        assert _commit(repo, ledger, "range", legs="pip-audit", extra_env=env).returncode == 0
+        assert not fake_uvx.log.exists()
+
+    def test_deleted_dep_file_never_invokes_pip_audit(self, hook_repo, fake_uvx) -> None:
+        """A deleted requirements file is not staged content: no audit, and no
+        NOT-audited warning from a failed `git show :<path>`."""
+        repo, ledger = hook_repo
+        self._seed(repo, ledger, "requirements.txt", "requests==2.25.0\n")
+        _run(repo, "rm", "-q", "requirements.txt")
+        result = _commit(repo, ledger, "drop reqs", legs="pip-audit", extra_env=fake_uvx.env())
+        assert result.returncode == 0
+        assert "NOT audited" not in result.stdout + result.stderr
+        assert not fake_uvx.log.exists()

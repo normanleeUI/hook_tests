@@ -41,7 +41,6 @@ EXPECTED = [
     # -- Group B: block_bare_pip + block_git_add_env --
     ("B", "2.10", "block_bare_pip", "pip install requests", "BLOCK"),
     ("B", "2.11", "block_bare_pip", "uv pip install requests", "ALLOW"),
-    ("B", "2.11g", "pip_audit_guard", "uv pip install requests", "ALLOW"),
     ("B", "2.12", "block_bare_pip", "git status", "ALLOW"),
     ("B", "2.13", "block_git_add_env", "git add .env", "BLOCK"),
     ("B", "2.14", "block_git_add_env", "git add .", "BLOCK"),
@@ -50,14 +49,12 @@ EXPECTED = [
     # -- Group C: cross-cutting + if: filtering + scan_secrets --
     ("C", "2.17a", "block_bare_pip", "pip install requests", "BLOCK"),
     ("C", "2.17b", "block_read_env", "pip install requests", "ALLOW"),
-    ("C", "2.17c", "pip_audit_guard", "pip install requests", "ALLOW"),
     ("C", "2.17d", "scan_secrets_on_commit", "pip install requests", "NOT_FIRED"),
     ("C", "2.18a", "block_git_add_env", "git add .env", "BLOCK"),
     ("C", "2.18b", "block_bare_pip", "git add .env", "ALLOW"),
     # With the realistic fixture staged (Batch 0), scan_secrets now BLOCKS the
     # commit; the file stays staged after each block, so all three commits block.
     ("C", "2.19a", "scan_secrets_on_commit", "git commit -m 'test'", "BLOCK"),
-    ("C", "2.19b", "pip_audit_guard", "git commit -m 'test'", "ALLOW"),
     ("C", "2.20", "scan_secrets_on_commit", "git commit -m 'test wiring'", "BLOCK"),
     ("C", "2.21", "scan_secrets_on_commit", "git status", "NOT_FIRED"),
     ("C", "2.22", "block_git_add_env", "git add .", "BLOCK"),

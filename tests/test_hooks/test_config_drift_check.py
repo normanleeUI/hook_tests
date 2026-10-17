@@ -1,9 +1,10 @@
 """Direction-aware drift messaging in config_drift_check.sh.
 
-The hook compares the ~/.claude/.last_install stamp (written by install.sh:
-"<timestamp> <repo sha>") against the config repo's HEAD to decide which way
-the drift points: same sha -> live edits need claude-sync; different sha ->
-an install.sh run is pending.
+The hook relays `sync.sh --check`'s per-file direction labels and names a
+script only when every file agrees: all live-behind -> install.sh, all
+live-ahead -> claude-sync, anything else (mixed, unknown, uncommitted, a
+failed check) -> neither. When in sync it heals a stale or dirty
+~/.claude/.last_install stamp to the full HEAD sha, but only over a clean tree.
 
 We build a fake HOME containing a fake claude-config repo (git-initialized so
 HEAD resolves, sync.sh replaced by a stub that reports drift or not) and run
@@ -73,7 +74,7 @@ def run_hook(home: Path, repo: Path) -> str:
 
 def head_sha(repo: Path) -> str:
     return subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
+        ["git", "rev-parse", "HEAD"],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -87,68 +88,160 @@ def test_in_sync_is_silent(fake_home):
     assert "unsynced change" not in run_hook(home, repo)
 
 
-def test_drift_without_stamp_suggests_sync(fake_home):
-    home, repo = fake_home
-    out = run_hook(home, repo)
-    assert "2 unsynced change(s)" in out
-    assert "claude-sync" in out
-    assert "Last install.sh" not in out
+LABELS = {
+    "behind": "live-behind: run install.sh",
+    "ahead": "live-ahead: run claude-sync",
+    "uncommitted": "repo-uncommitted: commit or discard the repo edit",
+    "unknown": "direction unknown: no usable install stamp",
+}
 
 
-def test_drift_with_current_stamp_suggests_sync(fake_home):
-    home, repo = fake_home
-    (home / ".claude/.last_install").write_text(
-        f"2026-08-13T10:00:00-07:00 {head_sha(repo)}\n"
+def drift_stub(repo: Path, *files: tuple[str, str]) -> None:
+    """A sync.sh stub printing `--check` drift output for (path, label key)."""
+    lines = "".join(f"  DRIFT: {path} ({LABELS[key]})\n" for path, key in files)
+    (repo / "sync.sh").write_text(
+        "#!/usr/bin/env bash\ncat <<'OUT'\n"
+        f"=== Config drift check ===\n{lines}DRIFT_TOTAL={len(files)}\nOUT\nexit 1\n"
     )
-    out = run_hook(home, repo)
-    assert "Last install.sh: 2026-08-13T10:00:00-07:00" in out
-    assert "claude-sync" in out
-    assert "install.sh' and restart" not in out
 
 
-def test_drift_with_stale_stamp_suggests_install(fake_home):
+def advises(out: str) -> tuple[bool, bool]:
+    """(names install.sh, names claude-sync)."""
+    return "install.sh" in out, "claude-sync" in out
+
+
+def test_all_live_behind_advises_install(fake_home):
+    """AC-HOOK-01."""
     home, repo = fake_home
-    (home / ".claude/.last_install").write_text("2026-01-01T00:00:00-07:00 deadbee\n")
+    drift_stub(repo, ("hooks/a.py", "behind"), ("rules/b.md", "behind"))
     out = run_hook(home, repo)
-    assert "Last install.sh" in out
-    assert "install.sh" in out
-    assert "restart" in out
-    assert "claude-sync" not in out
+    assert advises(out) == (True, False), out
+    assert "hooks/a.py (live-behind)" in out, out
+    assert "rules/b.md (live-behind)" in out, out
 
 
-def test_drift_with_stale_stamp_mentions_manual_copy_possibility(fake_home):
-    """2026-08-25: the repo-moved message must also name the alternative —
-    a manual-copy deploy that left the stamp stale — and point at the
-    per-file sync.sh --check output, instead of asserting install.sh is
-    the only fix."""
+def test_all_live_ahead_advises_claude_sync(fake_home):
+    """AC-HOOK-02."""
     home, repo = fake_home
-    (home / ".claude/.last_install").write_text("2026-01-01T00:00:00-07:00 deadbee\n")
+    drift_stub(repo, ("settings.json", "ahead"), ("hooks/a.py", "ahead"))
     out = run_hook(home, repo)
-    assert "manual" in out
-    assert "--check" in out
+    assert advises(out) == (False, True), out
+    assert "settings.json (live-ahead)" in out, out
 
 
-def test_in_sync_stale_stamp_self_heals_to_head_and_logs(fake_home):
-    """2026-08-25 self-heal: when sync.sh --check says IN SYNC but the stamp
-    sha != repo HEAD, the live content provably equals the repo — a manual
-    copy moved content without moving the stamp. The hook rewrites the stamp
-    to '<timestamp> <HEAD short sha>' (install.sh's format) and logs a HEAL
-    decision line, so the next drift nudge names the right direction."""
+def test_lone_repo_uncommitted_advises_neither(fake_home):
+    """AC-HOOK-03."""
+    home, repo = fake_home
+    drift_stub(repo, ("hooks/a.py", "uncommitted"))
+    out = run_hook(home, repo)
+    assert advises(out) == (False, False), out
+    assert "hooks/a.py (repo-uncommitted)" in out, out
+
+
+def test_mixed_directions_advise_neither(fake_home):
+    """AC-HOOK-04."""
+    home, repo = fake_home
+    drift_stub(repo, ("hooks/a.py", "behind"), ("settings.json", "ahead"))
+    out = run_hook(home, repo)
+    assert advises(out) == (False, False), out
+    assert "mixed" in out, out
+
+
+def test_unknown_direction_advises_neither(fake_home):
+    """AC-HOOK-05."""
+    home, repo = fake_home
+    drift_stub(repo, ("settings.json", "unknown"))
+    out = run_hook(home, repo)
+    assert advises(out) == (False, False), out
+    assert "settings.json (direction unknown)" in out, out
+
+
+@pytest.mark.parametrize(
+    ("stub", "rc", "last"),
+    [
+        ("echo 'fatal: something broke' >&2\nexit 2", 2, "fatal: something broke"),
+        ("echo 'sync.sh needs rsync'\nexit 1", 1, "sync.sh needs rsync"),
+        (
+            "echo '  DRIFT: hooks/a.py (live-behind: run install.sh)'\necho DRIFT_TOTAL=1\nexit 2",
+            2,
+            "DRIFT_TOTAL=1",
+        ),
+        ("exit 0", 0, ""),
+    ],
+)
+def test_check_crash_reports_failure(fake_home, stub, rc, last):
+    """AC-HOOK-06: anything but rc 0 + IN_SYNC or rc 1 + DRIFT_TOTAL is a
+    failed check, not drift: stderr crash, rc 1 without a total (usage or
+    missing rsync), a total with the wrong rc, rc 0 with no IN_SYNC."""
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(f"#!/usr/bin/env bash\n{stub}\n")
+    out = run_hook(home, repo)
+    assert f"drift check failed (rc {rc})" in out, out
+    assert last in out, out
+    assert advises(out) == (False, False), out
+    assert "unsynced change(s)" not in out, out
+
+
+def test_drift_total_without_lines_advises_neither(fake_home):
+    """No parseable DRIFT lines means no evidence of any direction."""
+    home, repo = fake_home
+    out = run_hook(home, repo)  # fixture stub: DRIFT_TOTAL=2, no DRIFT lines
+    assert "2 unsynced change(s)" in out, out
+    assert advises(out) == (False, False), out
+
+
+@pytest.mark.parametrize("old_sha", ["deadbee", "HEAD7"])
+def test_in_sync_stale_stamp_heals_to_full_sha(fake_home, old_sha):
+    """AC-HOOK-07: a stale sha, or the current HEAD's 7-char short form
+    (old install.sh stamps), heals to the 40-hex HEAD and logs a HEAL line."""
     home, repo = fake_home
     (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
-    (home / ".claude/.last_install").write_text("2026-01-01T00:00:00-07:00 deadbee\n")
+    full = head_sha(repo)
+    old = full[:7] if old_sha == "HEAD7" else old_sha
+    (home / ".claude/.last_install").write_text(f"2026-01-01T00:00:00-07:00 {old}\n")
     run_hook(home, repo)
-    stamp = (home / ".claude/.last_install").read_text().strip()
-    when, sha = stamp.split()
-    assert sha == head_sha(repo)
-    # install.sh writes `date -Iseconds` — assert the same shape.
-    datetime.datetime.fromisoformat(when)
+    when, sha = (home / ".claude/.last_install").read_text().split()
+    assert sha == full and len(sha) == 40, sha
+    datetime.datetime.fromisoformat(when)  # install.sh writes `date -Iseconds`
     log = (home / "hook_debug.log").read_text()
-    assert f"HEAL   stamp deadbee -> {sha}" in log
+    assert f"HEAL   stamp {old} -> {full}" in log, log
+
+
+def test_in_sync_dirty_stamp_heals(fake_home):
+    """AC-HOOK-08: clean tree, stamp at HEAD marked dirty -> dirty dropped."""
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    full = head_sha(repo)
+    (home / ".claude/.last_install").write_text(
+        f"2026-01-01T00:00:00-07:00 {full} dirty\n"
+    )
+    run_hook(home, repo)
+    fields = (home / ".claude/.last_install").read_text().split()
+    assert fields[1:] == [full], fields
+
+
+def test_in_sync_dirty_tree_does_not_heal(fake_home):
+    """AC-HOOK-11: IN_SYNC means live equals the working tree, not HEAD."""
+    home, repo = fake_home
+    (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
+    (repo / "hooks/x.py").write_text("uncommitted\n")
+    original = f"2026-01-01T00:00:00-07:00 {head_sha(repo)} dirty\n"
+    (home / ".claude/.last_install").write_text(original)
+    run_hook(home, repo)
+    assert (home / ".claude/.last_install").read_text() == original
+
+
+def test_drift_list_capped_at_ten(fake_home):
+    """AC-HOOK-10."""
+    home, repo = fake_home
+    drift_stub(repo, *[(f"skills/s{i}/SKILL.md", "behind") for i in range(30)])
+    out = run_hook(home, repo)
+    assert out.count("(live-behind)") == 10, out
+    assert "…and 20 more" in out, out
 
 
 def test_in_sync_current_stamp_untouched(fake_home):
-    """In sync with a current stamp: no rewrite (byte-identical stamp)."""
+    """AC-HOOK-09: in sync with a current full stamp: no rewrite."""
     home, repo = fake_home
     (repo / "sync.sh").write_text(SYNC_STUB_CLEAN)
     original = f"2026-08-13T10:00:00-07:00 {head_sha(repo)}\n"

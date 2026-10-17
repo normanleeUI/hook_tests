@@ -6,39 +6,13 @@ They are bytes patterns (the leg scans the raw staged diff), so every
 sample is encoded before matching. Pure regex: no git state, no subprocess.
 """
 
-import importlib.machinery
-import importlib.util
-import os
-from pathlib import Path
-
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-_HOOK = (
-    Path(
-        os.environ.get(
-            "CLAUDE_CONFIG",
-            Path.home() / "projects" / "shared_resources" / "claude-config",
-        )
-    )
-    / "githooks"
-    / "pre-commit"
-)
+from tests.test_hooks.hook_runner import load_precommit
 
-
-def _load_patterns() -> dict:
-    loader = importlib.machinery.SourceFileLoader("precommit_patterns", str(_HOOK))
-    spec = importlib.util.spec_from_file_location(
-        "precommit_patterns", _HOOK, loader=loader
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod._SECRET_PATTERNS
-
-
-PATTERNS = _load_patterns()
+PATTERNS = load_precommit()._SECRET_PATTERNS
 
 
 def _matching(text: str) -> set[str]:

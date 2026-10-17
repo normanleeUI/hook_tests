@@ -115,6 +115,29 @@ class TestPhase3EscapeHatches:
     """Phase 3: the pre-commit is the only secret layer, so the remaining
     documented ways a session could switch it off are blocked too."""
 
+    def test_long_commands_stay_fast(self) -> None:
+        """The hook runs on every Bash command, and auto-mode edits go through
+        long heredocs. These inputs took 1-8 s each when the regexes walked
+        the whole command from every `git` word; per-segment checks keep
+        them near the subprocess start-up cost."""
+        import time
+
+        heavy = [
+            "git config " * 400 + "core.hooksPath",
+            "cat > notes.md <<'EOF'\n"
+            + "see git log and git docs on hookspath\n" * 800
+            + "EOF",
+            "see git log and git docs about commit " * 800,
+        ]
+        for cmd in heavy:
+            start = time.monotonic()
+            run_hook(HOOK, _payload(cmd))
+            assert time.monotonic() - start < 2.0, cmd[:40]
+
+    def test_continued_commit_with_n_blocks(self) -> None:
+        code, _, _ = run_hook(HOOK, _payload("git commit -m x \\\n  -n"))
+        assert code == 2
+
     def test_second_chained_commit_with_n_blocks(self) -> None:
         """AC-NV-01: every `git commit` in the command is checked, not the first."""
         code, stderr, _ = run_hook(
@@ -132,6 +155,7 @@ class TestPhase3EscapeHatches:
             "git config --global core.hooksPath /tmp/x",
             "git -C repo config core.hooksPath .husky",  # global options before config
             "git config set core.hooksPath /dev/null",  # git 2.46+ subcommand form
+            "git \\\n  config core.hooksPath /dev/null",  # backslash-newline continues
         ],
     )
     def test_hookspath_override_blocks(self, cmd: str) -> None:

@@ -149,7 +149,7 @@ class TestBlockBarePipCommandPosition:
 
     The old regex matched `pip install` anywhere in the string, so any command
     that merely *talked about* pip (echo, grep, a comment, a commit message)
-    was blocked. Same bug, same fix, as pip_audit_check/guard.
+    was blocked.
     """
 
     @pytest.mark.parametrize(

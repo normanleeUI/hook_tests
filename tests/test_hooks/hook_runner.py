@@ -5,15 +5,36 @@ and HOOKS_DIR directly -- pytest's conftest is auto-loaded but not
 importable as a regular module.
 """
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import subprocess
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
 
 HOOKS_DIR = Path(os.environ.get("HOOKS_DIR", str(Path.home() / ".claude" / "hooks")))
+# The global pre-commit under test: the claude-config repo copy by default.
+CLAUDE_CONFIG = Path(
+    os.environ.get(
+        "CLAUDE_CONFIG", Path.home() / "projects" / "shared_resources" / "claude-config"
+    )
+)
+PRECOMMIT_SRC = CLAUDE_CONFIG / "githooks" / "pre-commit"
+
+
+def load_precommit() -> ModuleType:
+    """Import the extension-less pre-commit as a module, for unit tests."""
+    name = "precommit_hook_under_test"
+    loader = importlib.machinery.SourceFileLoader(name, str(PRECOMMIT_SRC))
+    spec = importlib.util.spec_from_file_location(name, PRECOMMIT_SRC, loader=loader)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def run_hook(

@@ -9,8 +9,6 @@ the error-path ledger line.
 
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -20,12 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
-CLAUDE_CONFIG = Path(
-    os.environ.get(
-        "CLAUDE_CONFIG", Path.home() / "projects" / "shared_resources" / "claude-config"
-    )
-)
-HOOK_SRC = CLAUDE_CONFIG / "githooks" / "pre-commit"
+from tests.test_hooks.hook_runner import CLAUDE_CONFIG, load_precommit
+from tests.test_hooks.hook_runner import PRECOMMIT_SRC as HOOK_SRC
 
 # B602 payload assembled from parts so THIS file never contains the literal
 # flaggable string (the live hook scans lines we add when committing here).
@@ -69,12 +63,26 @@ def _commit(
 
 
 def _stage(repo: Path, name: str, content: str) -> None:
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
     (repo / name).write_text(content)
     _run(repo, "add", name)
 
 
 def _head_count(repo: Path) -> int:
     return int(_run(repo, "rev-list", "--count", "HEAD").stdout.strip())
+
+
+def _seed(repo: Path, ledger: Path, name: str, content: str) -> None:
+    """Commit a file with every leg off, so it is HEAD's version."""
+    _stage(repo, name, content)
+    assert _commit(repo, ledger, "seed", legs="").returncode == 0
+
+
+def _assert_blocked(repo: Path, before: int, result, where: str) -> None:
+    assert result.returncode == 1, result.stderr
+    assert _head_count(repo) == before
+    assert BLOCK_HEADER in result.stderr
+    assert where in result.stderr
 
 
 @pytest.fixture
@@ -1170,16 +1178,7 @@ class TestPytestLeg:
 
 def _load_hook_module(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("PRECOMMIT_LOG", str(tmp_path / "unit-ledger.log"))
-    loader = importlib.machinery.SourceFileLoader(
-        "precommit_hook_under_test", str(HOOK_SRC)
-    )
-    spec = importlib.util.spec_from_file_location(
-        "precommit_hook_under_test", HOOK_SRC, loader=loader
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return load_precommit()
 
 
 class TestAddedLines:
@@ -1281,12 +1280,6 @@ def _audited(fake) -> list[str]:
 
 
 class TestPipAuditLeg:
-    def _seed(self, repo: Path, ledger: Path, name: str, content: str) -> None:
-        """Commit a dependency file with every leg off, so it is HEAD's version."""
-        (repo / name).parent.mkdir(parents=True, exist_ok=True)
-        _stage(repo, name, content)
-        assert _commit(repo, ledger, "seed", legs="").returncode == 0
-
     def test_requirements_added_vuln_blocks(self, hook_repo, fake_uvx) -> None:
         """AC-AUD-01."""
         repo, ledger = hook_repo
@@ -1305,7 +1298,7 @@ class TestPipAuditLeg:
     def test_uv_lock_bump_to_vuln_blocks(self, hook_repo, fake_uvx) -> None:
         """AC-AUD-02."""
         repo, ledger = hook_repo
-        self._seed(
+        _seed(
             repo, ledger, "uv.lock", _lock(("requests", "2.31.0"), ("idna", "3.6"))
         )
         before = _head_count(repo)
@@ -1320,7 +1313,7 @@ class TestPipAuditLeg:
     def test_unchanged_vuln_pin_does_not_block(self, hook_repo, fake_uvx) -> None:
         """AC-AUD-03: the unchanged vulnerable pin is never sent to pip-audit."""
         repo, ledger = hook_repo
-        self._seed(repo, ledger, "requirements.txt", "requests==2.25.0\nidna==3.6\n")
+        _seed(repo, ledger, "requirements.txt", "requests==2.25.0\nidna==3.6\n")
         before = _head_count(repo)
         _stage(repo, "requirements.txt", "requests==2.25.0\nidna==3.7\n")
         env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
@@ -1333,7 +1326,7 @@ class TestPipAuditLeg:
         """AC-AUD-12: case and separator respellings are not changes; only the
         real bump in the same commit is audited."""
         repo, ledger = hook_repo
-        self._seed(
+        _seed(
             repo,
             ledger,
             "requirements.txt",
@@ -1374,7 +1367,6 @@ class TestPipAuditLeg:
     def test_nested_backend_lock_is_audited(self, hook_repo, fake_uvx) -> None:
         """AC-AUD-06."""
         repo, ledger = hook_repo
-        (repo / "backend").mkdir()
         _stage(repo, "backend/uv.lock", _lock(("requests", "2.25.0")))
         env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
         result = _commit(repo, ledger, "backend lock", legs="pip-audit", extra_env=env)
@@ -1399,14 +1391,11 @@ class TestPipAuditLeg:
         assert "error:" in text
         assert "clean" not in text
 
-    def test_audit_timeout_warns_not_audited(self, monkeypatch, tmp_path) -> None:
+    def test_audit_timeout_warns_not_audited(self, monkeypatch, tmp_path, hook_repo) -> None:
         """AC-AUD-07, unit level: a pip-audit timeout is a NOT-audited warning."""
         mod = _load_hook_module(monkeypatch, tmp_path)
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
-        (repo / "requirements.txt").write_text("requests==2.25.0\n")
-        _run(repo, "add", "requirements.txt")
+        repo, _ = hook_repo
+        _stage(repo, "requirements.txt", "requests==2.25.0\n")
         monkeypatch.chdir(repo)
         real_run = subprocess.run
 
@@ -1485,7 +1474,7 @@ class TestPipAuditLeg:
     ) -> None:
         """AC-AUD-11. Regression guard: passes before the leg exists too."""
         repo, ledger = hook_repo
-        self._seed(repo, ledger, "requirements.txt", "requests==2.25.0\nidna==3.6\n")
+        _seed(repo, ledger, "requirements.txt", "requests==2.25.0\nidna==3.6\n")
         env = fake_uvx.env(FAKE_VULNS="requests==2.25.0")
         _stage(repo, "requirements.txt", "requests==2.25.0\n")
         assert (
@@ -1504,7 +1493,7 @@ class TestPipAuditLeg:
         """A deleted requirements file is not staged content: no audit, and no
         NOT-audited warning from a failed `git show :<path>`."""
         repo, ledger = hook_repo
-        self._seed(repo, ledger, "requirements.txt", "requests==2.25.0\n")
+        _seed(repo, ledger, "requirements.txt", "requests==2.25.0\n")
         _run(repo, "rm", "-q", "requirements.txt")
         result = _commit(
             repo, ledger, "drop reqs", legs="pip-audit", extra_env=fake_uvx.env()
@@ -1522,43 +1511,33 @@ SK_PROJ_KEY = "sk-" + "proj-" + "Xy7Kp2Qw9Lm4Nb6Vc1Zt8Rd3" * 2
 
 
 class TestSecretLeg:
-    def _seed(self, repo: Path, ledger: Path, name: str, content: str) -> None:
-        _stage(repo, name, content)
-        assert _commit(repo, ledger, "seed", legs="").returncode == 0
-
-    def _assert_blocked(self, repo: Path, before: int, result, where: str) -> None:
-        assert result.returncode == 1, result.stderr
-        assert _head_count(repo) == before
-        assert BLOCK_HEADER in result.stderr
-        assert where in result.stderr
-
     def test_key_in_non_py_file_blocks(self, hook_repo) -> None:
         """AC-SEC-01: a key staged just before the commit, in a non-.py file."""
         repo, ledger = hook_repo
         before = _head_count(repo)
         _stage(repo, "config.yaml", f"name: demo\naws_key: {AWS_KEY}\n")
         result = _commit(repo, ledger, "add config", legs="secret")
-        self._assert_blocked(repo, before, result, "config.yaml:2")
+        _assert_blocked(repo, before, result, "config.yaml:2")
         assert "AWS access key ID" in result.stderr
 
     def test_commit_all_blocks(self, hook_repo) -> None:
         """AC-SEC-02: `commit -a` stages the key itself, after any PreToolUse
         hook could have looked."""
         repo, ledger = hook_repo
-        self._seed(repo, ledger, "notes.txt", "hello\n")
+        _seed(repo, ledger, "notes.txt", "hello\n")
         before = _head_count(repo)
         (repo / "notes.txt").write_text(f"hello\nkey = {AWS_KEY}\n")
         result = _commit(repo, ledger, "edit", legs="secret", args=("-a",))
-        self._assert_blocked(repo, before, result, "notes.txt:2")
+        _assert_blocked(repo, before, result, "notes.txt:2")
 
     def test_commit_pathspec_blocks(self, hook_repo) -> None:
         """AC-SEC-03: `commit -m x <path>` commits through a temporary index."""
         repo, ledger = hook_repo
-        self._seed(repo, ledger, "notes.txt", "hello\n")
+        _seed(repo, ledger, "notes.txt", "hello\n")
         before = _head_count(repo)
         (repo / "notes.txt").write_text(f"key = {AWS_KEY}\nhello\n")
         result = _commit(repo, ledger, "edit", legs="secret", args=("notes.txt",))
-        self._assert_blocked(repo, before, result, "notes.txt:1")
+        _assert_blocked(repo, before, result, "notes.txt:1")
 
     def test_latin1_file_blocks_without_traceback(self, hook_repo) -> None:
         """AC-SEC-04."""
@@ -1569,7 +1548,7 @@ class TestSecretLeg:
         )
         _run(repo, "add", "legacy.cfg")
         result = _commit(repo, ledger, "latin1", legs="secret")
-        self._assert_blocked(repo, before, result, "legacy.cfg:2")
+        _assert_blocked(repo, before, result, "legacy.cfg:2")
         assert "Traceback" not in result.stdout + result.stderr
 
     def test_nul_byte_file_blocks(self, hook_repo) -> None:
@@ -1579,7 +1558,7 @@ class TestSecretLeg:
         (repo / "blob.bin").write_bytes(b"\x00\x01head\n" + AWS_KEY.encode() + b"\n")
         _run(repo, "add", "blob.bin")
         result = _commit(repo, ledger, "binary", legs="secret")
-        self._assert_blocked(repo, before, result, "blob.bin:2")
+        _assert_blocked(repo, before, result, "blob.bin:2")
 
     def test_plusplus_content_line_blocks(self, hook_repo) -> None:
         """AC-SEC-06: a content line `++<key>` renders as `+++<key>` in the
@@ -1588,7 +1567,7 @@ class TestSecretLeg:
         before = _head_count(repo)
         _stage(repo, "notes.txt", f"++{AWS_KEY}\n")
         result = _commit(repo, ledger, "plusplus", legs="secret")
-        self._assert_blocked(repo, before, result, "notes.txt:1")
+        _assert_blocked(repo, before, result, "notes.txt:1")
 
     def test_sk_proj_key_blocks(self, hook_repo) -> None:
         """AC-SEC-07, commit level."""
@@ -1596,7 +1575,7 @@ class TestSecretLeg:
         before = _head_count(repo)
         _stage(repo, "app.toml", f'openai = "{SK_PROJ_KEY}"\n')
         result = _commit(repo, ledger, "proj key", legs="secret")
-        self._assert_blocked(repo, before, result, "app.toml:1")
+        _assert_blocked(repo, before, result, "app.toml:1")
         assert "OpenAI API key" in result.stderr
 
     def test_noprefix_config_still_names_file(self, hook_repo) -> None:
@@ -1608,7 +1587,7 @@ class TestSecretLeg:
         before = _head_count(repo)
         _stage(repo, "config.yaml", f"aws_key: {AWS_KEY}\n")
         result = _commit(repo, ledger, "noprefix", legs="secret")
-        self._assert_blocked(repo, before, result, "config.yaml:1")
+        _assert_blocked(repo, before, result, "config.yaml:1")
 
     def test_non_ascii_name_is_named_unquoted(self, hook_repo) -> None:
         """Under default git config a non-ASCII path is C-quoted in the
@@ -1617,14 +1596,14 @@ class TestSecretLeg:
         before = _head_count(repo)
         _stage(repo, "café.yaml", f"aws_key: {AWS_KEY}\n")
         result = _commit(repo, ledger, "accent", legs="secret")
-        self._assert_blocked(repo, before, result, "café.yaml:1")
+        _assert_blocked(repo, before, result, "café.yaml:1")
 
     def test_unchanged_key_line_does_not_block(self, hook_repo) -> None:
         """AC-SEC-08: only added lines count, so a teammate's existing key
         never blocks an unrelated edit. Regression guard against over-blocking:
         passes before the leg exists too."""
         repo, ledger = hook_repo
-        self._seed(repo, ledger, "notes.txt", f"a\n{AWS_KEY}\nb\n")
+        _seed(repo, ledger, "notes.txt", f"a\n{AWS_KEY}\nb\n")
         before = _head_count(repo)
         _stage(repo, "notes.txt", f"a2\n{AWS_KEY}\nb\n")
         result = _commit(repo, ledger, "edit a", legs="secret")
@@ -1634,7 +1613,7 @@ class TestSecretLeg:
     def test_deleting_key_line_lands(self, hook_repo) -> None:
         """AC-SEC-09. Regression guard: passes before the leg exists too."""
         repo, ledger = hook_repo
-        self._seed(repo, ledger, "notes.txt", f"a\n{AWS_KEY}\n")
+        _seed(repo, ledger, "notes.txt", f"a\n{AWS_KEY}\n")
         before = _head_count(repo)
         _stage(repo, "notes.txt", "a\n")
         result = _commit(repo, ledger, "drop key", legs="secret")
@@ -1717,11 +1696,6 @@ class TestEnvNameLeg:
         path.write_text(f"API_TOKEN={ENV_SENTINEL}\n")
         _run(repo, "add", *(["-f"] if force else []), rel)
 
-    def _assert_env_blocked(self, repo: Path, before: int, result, rel: str) -> None:
-        assert result.returncode == 1, result.stderr
-        assert _head_count(repo) == before
-        assert f"\n   {rel}:0  " in result.stderr
-
     def test_force_added_root_env_blocks(self, hook_repo) -> None:
         """AC-ENV-01: gitignored, then force-added. The message names the path
         and never prints the file's contents."""
@@ -1731,7 +1705,7 @@ class TestEnvNameLeg:
         before = _head_count(repo)
         self._add_env(repo, ".env", force=True)
         result = _commit(repo, ledger, "oops", legs="secret")
-        self._assert_env_blocked(repo, before, result, ".env")
+        _assert_blocked(repo, before, result, "\n   .env:0  ")
         text = ledger.read_text() if ledger.exists() else ""
         for out in (result.stdout, result.stderr, text):
             assert ENV_SENTINEL not in out
@@ -1742,7 +1716,7 @@ class TestEnvNameLeg:
         before = _head_count(repo)
         self._add_env(repo, "app/.env.local")
         result = _commit(repo, ledger, "oops", legs="secret")
-        self._assert_env_blocked(repo, before, result, "app/.env.local")
+        _assert_blocked(repo, before, result, "\n   app/.env.local:0  ")
 
     @pytest.mark.parametrize("kind", ["example", "sample", "template", "dist"])
     def test_env_example_lands(self, hook_repo, kind) -> None:
@@ -1784,7 +1758,7 @@ class TestEnvNameLeg:
         before = _head_count(repo)
         self._add_env(repo, "données/.env")
         result = _commit(repo, ledger, "oops", legs="secret")
-        self._assert_env_blocked(repo, before, result, "données/.env")
+        _assert_blocked(repo, before, result, "\n   données/.env:0  ")
 
     def test_env_message_routes_fix_via_user(self, hook_repo) -> None:
         """AC-ENV-07 (Decision 9): block_read_env refuses any session command

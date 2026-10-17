@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
 """Git-native pre-commit backstop: block commits that add secrets or .env files.
 
-Why this exists (option D): the Claude Code PreToolUse hook
-`~/.claude/hooks/scan_secrets_on_commit.py` is scoped with `if: Bash(git commit*)`.
-That prefix-matcher is bypassable — `git -C . commit ...` does not match
-`git commit*`, so the scan is skipped and secrets can land in history. A git
-pre-commit hook fires at actual commit time regardless of HOW the commit is
-invoked, so it closes that gap. This file is the real guarantee; the Claude
-Code hook stays as the early/UX block.
+Why a git hook: it fires at actual commit time regardless of HOW the commit
+is invoked, which a command-text matcher before the command cannot do.
 
 SELF-CONTAINED by design — no imports from ~/.claude/hooks, so the repo stays
 reproducible for anyone who clones it and runs scripts/install_hooks.sh.
